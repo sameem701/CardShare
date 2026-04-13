@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+<title>LendCard</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+<style>
+:root {
+  --green: #00C87A;
+  --green-dark: #00A362;
+  --green-dim: rgba(0,200,122,0.12);
+  --green-dim2: rgba(0,200,122,0.06);
+  --bg: #0A0D0F;
+  --bg2: #111417;
+  --bg3: #181C20;
+  --bg4: #1E2228;
+  --border: rgba(255,255,255,0.07);
+  --border2: rgba(255,255,255,0.12);
+  --text: #F0F2F4;
+  --text2: #8A9099;
+  --text3: #535A63;
+  --red: #FF4D4D;
+  --red-dim: rgba(255,77,77,0.12);
+  --amber: #F5A623;
+  --amber-dim: rgba(245,166,35,0.12);
+  --blue: #4DA6FF;
+  --blue-dim: rgba(77,166,255,0.12);
+  --radius: 16px;
+  --radius-sm: 10px;
+  --radius-xs: 7px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; overflow: hidden; }
+
+/* SHELL */
+.shell { max-width: 390px; margin: 0 auto; height: 100vh; display: flex; flex-direction: column; position: relative; overflow: hidden; background: var(--bg); }
+
+/* SCREENS */
+.screen { position: absolute; inset: 0; display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; padding: 0 0 90px; opacity: 0; pointer-events: none; transform: translateX(30px); transition: opacity 0.28s ease, transform 0.28s ease; }
+.screen.active { opacity: 1; pointer-events: all; transform: translateX(0); }
+.screen.exit { opacity: 0; transform: translateX(-30px); }
+.scroll-content { padding: 0 20px; display: flex; flex-direction: column; gap: 16px; padding-bottom: 20px; }
+
+/* TOP BAR */
+.topbar { padding: 52px 20px 16px; display: flex; align-items: center; gap: 12px; background: var(--bg); position: sticky; top: 0; z-index: 10; }
+.topbar-logo { width: 36px; height: 36px; border-radius: 10px; background: var(--green); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.topbar h1 { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 700; color: var(--text); letter-spacing: -0.5px; }
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.back-btn { background: none; border: none; color: var(--text2); font-size: 14px; cursor: pointer; font-family: 'DM Sans', sans-serif; display: flex; align-items: center; gap: 6px; padding: 6px 0; }
+
+/* CARDS */
+.card { background: var(--bg2); border: 0.5px solid var(--border); border-radius: var(--radius); padding: 16px 18px; }
+.card-sm { background: var(--bg3); border: 0.5px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; }
+
+/* WALLET HERO */
+.wallet-hero { background: var(--bg2); border: 0.5px solid var(--border); border-radius: var(--radius); padding: 22px 20px; position: relative; overflow: hidden; }
+.wallet-hero::before { content: ''; position: absolute; top: -40px; right: -40px; width: 160px; height: 160px; border-radius: 50%; background: var(--green-dim2); pointer-events: none; }
+.wallet-label { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 500; margin-bottom: 6px; }
+.wallet-amount { font-family: 'Syne', sans-serif; font-size: 36px; font-weight: 700; color: var(--text); letter-spacing: -1px; }
+.wallet-sub { font-size: 12px; color: var(--text2); margin-top: 4px; }
+.wallet-badges { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+
+/* STATS */
+.stats-row { display: flex; gap: 10px; }
+.stat-box { flex: 1; background: var(--bg2); border: 0.5px solid var(--border); border-radius: var(--radius-sm); padding: 14px 12px; }
+.stat-val { font-family: 'Syne', sans-serif; font-size: 18px; font-weight: 600; color: var(--text); }
+.stat-lbl { font-size: 11px; color: var(--text3); margin-top: 3px; }
+
+/* TAGS / BADGES */
+.badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; padding: 4px 10px; border-radius: 20px; }
+.badge-green { background: var(--green-dim); color: var(--green); }
+.badge-amber { background: var(--amber-dim); color: var(--amber); }
+.badge-red { background: var(--red-dim); color: var(--red); }
+.badge-blue { background: var(--blue-dim); color: var(--blue); }
+.badge-gray { background: rgba(255,255,255,0.06); color: var(--text2); }
+
+/* BUTTONS */
+.btn { font-family: 'DM Sans', sans-serif; font-size: 14px; font-weight: 500; padding: 12px 20px; border-radius: var(--radius-sm); cursor: pointer; border: none; transition: all 0.18s; }
+.btn-primary { background: var(--green); color: #000; }
+.btn-primary:hover { background: var(--green-dark); }
+.btn-primary:active { transform: scale(0.97); }
+.btn-ghost { background: var(--bg3); color: var(--text); border: 0.5px solid var(--border2); }
+.btn-ghost:hover { background: var(--bg4); }
+.btn-danger { background: var(--red-dim); color: var(--red); border: 0.5px solid rgba(255,77,77,0.2); }
+.btn-row { display: flex; gap: 10px; }
+.btn-row .btn { flex: 1; text-align: center; }
+.btn-full { width: 100%; text-align: center; }
+
+/* AVATAR */
+.av { border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 500; flex-shrink: 0; font-size: 13px; }
+.av-38 { width: 38px; height: 38px; }
+.av-44 { width: 44px; height: 44px; font-size: 15px; }
+.av-52 { width: 52px; height: 52px; font-size: 18px; }
+.av-g { background: rgba(0,200,122,0.15); color: var(--green); }
+.av-b { background: var(--blue-dim); color: var(--blue); }
+.av-p { background: rgba(180,100,255,0.12); color: #C47AFF; }
+.av-a { background: var(--amber-dim); color: var(--amber); }
+.av-r { background: var(--red-dim); color: var(--red); }
+
+/* DIVIDER */
+.div { height: 0.5px; background: var(--border); margin: 10px 0; }
+
+/* ROWS */
+.row { display: flex; align-items: center; justify-content: space-between; }
+.row-left { display: flex; align-items: center; gap: 12px; }
+
+/* INPUT */
+.inp { width: 100%; padding: 12px 14px; background: var(--bg3); border: 0.5px solid var(--border2); border-radius: var(--radius-sm); color: var(--text); font-size: 14px; font-family: 'DM Sans', sans-serif; outline: none; transition: border-color 0.2s; }
+.inp:focus { border-color: var(--green); }
+.inp::placeholder { color: var(--text3); }
+.inp-label { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 500; margin-bottom: 5px; }
+.inp-group { display: flex; flex-direction: column; gap: 4px; }
+
+/* VIRTUAL CARD */
+.vcard { border-radius: 18px; padding: 22px 22px; background: linear-gradient(135deg, #0D1F16 0%, #0A1A12 100%); border: 0.5px solid rgba(0,200,122,0.25); position: relative; overflow: hidden; }
+.vcard::after { content: ''; position: absolute; top: -50px; right: -50px; width: 200px; height: 200px; border-radius: 50%; background: rgba(0,200,122,0.05); pointer-events: none; }
+.vcard-dead { border-color: rgba(255,255,255,0.07); filter: saturate(0.2); opacity: 0.5; }
+.vcard-chip { width: 32px; height: 24px; border-radius: 5px; background: rgba(0,200,122,0.2); border: 0.5px solid rgba(0,200,122,0.3); margin-bottom: 18px; display: flex; align-items: center; justify-content: center; }
+.vcard-num { font-family: 'Syne', sans-serif; font-size: 16px; letter-spacing: 0.18em; color: var(--text); font-weight: 600; }
+.vcard-meta { display: flex; justify-content: space-between; margin-top: 14px; font-size: 11px; color: var(--text2); }
+.vcard-name { font-size: 13px; color: var(--text); font-weight: 500; margin-top: 3px; }
+.vcard-status { position: absolute; top: 16px; right: 16px; }
+.vcard-expiry-bar { margin-top: 14px; }
+.expiry-track { height: 3px; background: rgba(255,255,255,0.08); border-radius: 2px; overflow: hidden; margin-top: 4px; }
+.expiry-fill { height: 100%; background: var(--green); border-radius: 2px; transition: width 1s linear; }
+
+/* PAYMENT REQUEST CARD */
+.req-card { background: var(--bg2); border: 0.5px solid var(--border); border-radius: var(--radius); padding: 16px 18px; }
+.req-merchant { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 700; color: var(--text); margin: 10px 0 4px; }
+.req-saving { font-size: 13px; color: var(--green); }
+
+/* BREAKDOWN */
+.breakdown { background: var(--bg3); border-radius: var(--radius-sm); padding: 12px 14px; display: flex; flex-direction: column; gap: 0; }
+.br-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-bottom: 0.5px solid var(--border); }
+.br-row:last-child { border-bottom: none; }
+.br-label { font-size: 13px; color: var(--text2); }
+.br-val { font-size: 13px; font-weight: 500; }
+.br-total { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 0.5px solid var(--border2); }
+.br-total span:first-child { font-size: 14px; color: var(--text); font-weight: 500; }
+.br-total span:last-child { font-family: 'Syne', sans-serif; font-size: 20px; font-weight: 700; color: var(--text); }
+
+/* SECURITY TIMELINE */
+.sec-timeline { display: flex; flex-direction: column; }
+.sec-step { display: flex; gap: 14px; padding: 12px 0; }
+.sec-dot-col { display: flex; flex-direction: column; align-items: center; width: 28px; flex-shrink: 0; }
+.sec-dot { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex-shrink: 0; }
+.sec-line { flex: 1; width: 1px; background: var(--border); margin: 4px 0; min-height: 16px; }
+.sec-body { flex: 1; padding-bottom: 4px; }
+.sec-title { font-size: 14px; font-weight: 500; color: var(--text); }
+.sec-sub { font-size: 12px; color: var(--text2); margin-top: 3px; line-height: 1.6; }
+
+/* HISTORY */
+.hist-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 0.5px solid var(--border); }
+.hist-row:last-child { border-bottom: none; }
+.hist-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+.hist-name { font-size: 14px; font-weight: 500; color: var(--text); }
+.hist-sub { font-size: 12px; color: var(--text2); margin-top: 1px; }
+.hist-amt { font-size: 14px; font-weight: 500; font-family: 'Syne', sans-serif; }
+
+/* CONTACT ROW */
+.contact-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 0.5px solid var(--border); cursor: pointer; }
+.contact-row:last-child { border-bottom: none; }
+.contact-row:hover { opacity: 0.85; }
+.contact-name { font-size: 14px; font-weight: 500; color: var(--text); }
+.contact-sub { font-size: 12px; color: var(--text2); margin-top: 2px; }
+
+/* SECTION LABEL */
+.sec-label { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 500; }
+
+/* NAV */
+.nav { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 390px; background: var(--bg); border-top: 0.5px solid var(--border); padding: 10px 0 24px; display: flex; z-index: 100; }
+.nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; padding: 4px 0; }
+.nav-ic { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; }
+.nav-lbl { font-size: 10px; color: var(--text3); font-weight: 500; transition: color 0.2s; }
+.nav-item.active .nav-lbl { color: var(--green); }
+.nav-item.active .nav-ic svg path, .nav-item.active .nav-ic svg rect, .nav-item.active .nav-ic svg circle { stroke: var(--green); }
+.nav-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--red); position: absolute; top: 0; right: 0; }
+.nav-ic-wrap { position: relative; }
+
+/* TOGGLE */
+.toggle { width: 42px; height: 24px; border-radius: 12px; background: var(--bg4); border: 0.5px solid var(--border2); cursor: pointer; position: relative; transition: background 0.2s; }
+.toggle.on { background: var(--green); border-color: var(--green); }
+.toggle::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left 0.2s; }
+.toggle.on::after { left: 21px; }
+
+/* OTP SCREEN */
+.otp-wrap { display: flex; gap: 10px; justify-content: center; margin: 20px 0; }
+.otp-box { width: 52px; height: 60px; background: var(--bg3); border: 0.5px solid var(--border2); border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; font-family: 'Syne', sans-serif; font-size: 24px; font-weight: 700; color: var(--text); transition: border-color 0.2s; }
+.otp-box.filled { border-color: var(--green); }
+
+/* VIRTUAL CARD GENERATE ANIMATION */
+@keyframes scanline { 0% { top: 0; } 100% { top: 100%; } }
+@keyframes pulse-green { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+@keyframes fadeInUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+.fade-in-up { animation: fadeInUp 0.4s ease forwards; }
+
+/* TOAST */
+#toast { position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%) translateY(10px); background: var(--bg3); border: 0.5px solid var(--border2); color: var(--text); padding: 12px 22px; border-radius: 30px; font-size: 13px; opacity: 0; transition: all 0.3s; pointer-events: none; z-index: 999; white-space: nowrap; max-width: 320px; text-align: center; }
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+#toast.success { border-color: rgba(0,200,122,0.3); color: var(--green); }
+#toast.error { border-color: rgba(255,77,77,0.3); color: var(--red); }
+
+/* MODAL OVERLAY */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 200; display: flex; align-items: flex-end; justify-content: center; opacity: 0; pointer-events: none; transition: opacity 0.25s; }
+.modal-overlay.open { opacity: 1; pointer-events: all; }
+.modal-sheet { background: var(--bg2); border: 0.5px solid var(--border); border-radius: 24px 24px 0 0; padding: 24px 20px 40px; width: 100%; max-width: 390px; transform: translateY(100%); transition: transform 0.3s ease; max-height: 85vh; overflow-y: auto; }
+.modal-overlay.open .modal-sheet { transform: translateY(0); }
+.modal-handle { width: 40px; height: 4px; background: var(--border2); border-radius: 2px; margin: 0 auto 20px; }
+.modal-title { font-family: 'Syne', sans-serif; font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 16px; }
+
+/* SECURITY LOCK SCREEN */
+.lock-screen { background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 20px; gap: 20px; }
+.lock-icon { width: 72px; height: 72px; border-radius: 20px; background: var(--green-dim); border: 0.5px solid rgba(0,200,122,0.3); display: flex; align-items: center; justify-content: center; }
+
+/* SCROLLBAR */
+::-webkit-scrollbar { width: 0; }
+
+/* CARD NUMBER FONT */
+.mono { font-family: 'Syne', monospace; letter-spacing: 0.08em; }
+
+/* SECURITY INDICATORS */
+.sec-indicator { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); }
+.sec-dot-green { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse-green 2s infinite; flex-shrink: 0; }
+.sec-dot-red { width: 6px; height: 6px; border-radius: 50%; background: var(--red); flex-shrink: 0; }
+
+/* SELECT PILL */
+.select-pills { display: flex; gap: 8px; flex-wrap: wrap; }
+.select-pill { padding: 8px 16px; border-radius: 20px; font-size: 13px; border: 0.5px solid var(--border2); cursor: pointer; color: var(--text2); background: var(--bg3); transition: all 0.15s; }
+.select-pill.on { background: var(--green-dim); border-color: rgba(0,200,122,0.4); color: var(--green); font-weight: 500; }
+
+/* ONBOARDING */
+.onboard { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 24px; text-align: center; gap: 0; }
+</style>
+</head>
+<body>
+<div class="shell" id="shell">
+
+  <!-- ── SCREEN: ONBOARDING ── -->
+  <div class="screen active" id="s-onboard" style="padding-bottom:0;">
+    <div class="onboard">
+      <div style="width:72px;height:72px;border-radius:20px;background:var(--green);display:flex;align-items:center;justify-content:center;margin-bottom:28px;">
+        <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+          <rect x="4" y="12" width="28" height="20" rx="4" stroke="black" stroke-width="2.5"/>
+          <path d="M12 12V10a6 6 0 0 1 12 0v2" stroke="black" stroke-width="2.5" stroke-linecap="round"/>
+          <circle cx="18" cy="22" r="3" fill="black"/>
+          <path d="M18 25v3" stroke="black" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div style="font-family:'Syne',sans-serif;font-size:34px;font-weight:700;color:var(--text);letter-spacing:-1px;line-height:1.1;margin-bottom:14px;">Lend your<br/>discounts.<br/><span style="color:var(--green);">Earn passively.</span></div>
+      <div style="font-size:15px;color:var(--text2);line-height:1.7;max-width:300px;margin-bottom:36px;">Share your bank card discounts with trusted friends. Get paid before your card is ever charged. Protected by virtual card tokens.</div>
+      <div style="display:flex;flex-direction:column;gap:10px;width:100%;">
+        <button class="btn btn-primary btn-full" onclick="showScreen('s-otp')" style="font-size:15px;padding:16px;">Get started</button>
+        <button class="btn btn-ghost btn-full" onclick="showScreen('s-otp')" style="font-size:15px;padding:16px;">I already have an account</button>
+      </div>
+      <div style="font-size:12px;color:var(--text3);margin-top:20px;">End-to-end encrypted · Tokenized cards · SBP compliant</div>
+    </div>
+  </div>
+
+  <!-- ── SCREEN: OTP ── -->
+  <div class="screen" id="s-otp" style="padding-bottom:0;">
+    <div style="flex:1;display:flex;flex-direction:column;padding:60px 24px 40px;">
+      <button class="back-btn" onclick="showScreen('s-onboard')" style="margin-bottom:24px;">← Back</button>
+      <div style="font-family:'Syne',sans-serif;font-size:26px;font-weight:700;color:var(--text);margin-bottom:8px;">Verify your<br/>phone number</div>
+      <div style="font-size:14px;color:var(--text2);margin-bottom:28px;">We sent a 6-digit code to +92 321 ••••789</div>
+      <div class="otp-wrap" id="otp-boxes">
+        <div class="otp-box">•</div>
+        <div class="otp-box">•</div>
+        <div class="otp-box">•</div>
+        <div class="otp-box">•</div>
+        <div class="otp-box">•</div>
+        <div class="otp-box">•</div>
+      </div>
+      <div style="font-size:13px;color:var(--text3);text-align:center;margin-bottom:28px;">Resend in 00:45</div>
+      <button class="btn btn-primary btn-full" onclick="doOTP()" style="font-size:15px;padding:16px;">Verify & continue</button>
+    </div>
+  </div>
+
+  <!-- ── SCREEN: HOME ── -->
+  <div class="screen" id="s-home">
+    <div class="topbar">
+      <div class="topbar-logo">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+          <rect x="2" y="7" width="20" height="14" rx="3" stroke="black" stroke-width="2.5"/>
+          <path d="M16 7V6a4 4 0 0 0-8 0v1" stroke="black" stroke-width="2.5" stroke-linecap="round"/>
+          <circle cx="12" cy="14" r="2" fill="black"/>
+        </svg>
+      </div>
+      <h1>LendCard</h1>
+      <div class="topbar-right">
+        <span class="badge badge-green" style="font-size:10px;">⚡ Live</span>
+        <div class="av av-38 av-g" style="cursor:pointer;" onclick="showScreen('s-profile')">AK</div>
+      </div>
+    </div>
+    <div class="scroll-content">
+
+      <div class="wallet-hero">
+        <div class="wallet-label">Wallet balance</div>
+        <div class="wallet-amount">PKR 1,840</div>
+        <div class="wallet-sub">+PKR 80 credited today · 3 cards active</div>
+        <div class="wallet-badges">
+          <span class="badge badge-green"><span class="sec-dot-green"></span>All systems secure</span>
+          <span class="badge badge-gray">12 txns this month</span>
+        </div>
+      </div>
+
+      <div class="stats-row">
+        <div class="stat-box"><div class="stat-val" style="color:var(--green);">PKR 6,300</div><div class="stat-lbl">Others saved</div></div>
+        <div class="stat-box"><div class="stat-val">PKR 1,840</div><div class="stat-lbl">You earned</div></div>
+        <div class="stat-box"><div class="stat-val">4</div><div class="stat-lbl">In circle</div></div>
+      </div>
+
+      <div class="sec-label">Pending approval</div>
+      <div class="req-card">
+        <div class="row-left" style="margin-bottom:10px;">
+          <div class="av av-38 av-b">SH</div>
+          <div>
+            <div style="font-size:14px;font-weight:500;color:var(--text);">Sara Hussain</div>
+            <div style="font-size:12px;color:var(--text2);">Payment received · awaiting your go</div>
+          </div>
+          <span class="badge badge-amber" style="margin-left:auto;">Pending</span>
+        </div>
+        <div class="req-merchant">Netflix</div>
+        <div class="req-saving">Sara saves PKR 630 · HBL Platinum discount</div>
+        <div style="margin:12px 0;">
+          <div class="breakdown">
+            <div class="br-row"><span class="br-label">Sara paid (held in escrow ✓)</span><span class="br-val" style="color:var(--blue);">PKR 1,700</span></div>
+            <div class="br-row"><span class="br-label">Platform fee</span><span class="br-val" style="color:var(--amber);">PKR 150</span></div>
+            <div class="br-row"><span class="br-label">Your incentive</span><span class="br-val" style="color:var(--green);">+ PKR 80</span></div>
+            <div class="br-row"><span class="br-label">Virtual card charge</span><span class="br-val" style="color:var(--red);">PKR 1,470</span></div>
+          </div>
+          <div class="br-total"><span>You receive net</span><span>PKR 80</span></div>
+        </div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:12px;line-height:1.6;">A one-time virtual card (valid 15 min, Netflix only, PKR 1,470 max) will be generated and auto-charged. Your real card number is never exposed.</div>
+        <div class="btn-row">
+          <button class="btn btn-danger" onclick="doDecline()">Decline</button>
+          <button class="btn btn-primary" onclick="showApproveModal()">Approve & generate token</button>
+        </div>
+      </div>
+
+      <div class="sec-label">Your cards</div>
+      <div class="card" style="cursor:pointer;" onclick="showScreen('s-card-detail')">
+        <div class="vcard">
+          <div class="vcard-chip">
+            <svg width="16" height="12" viewBox="0 0 16 12" fill="none"><rect x="0.5" y="0.5" width="15" height="11" rx="2" stroke="rgba(0,200,122,0.5)"/><line x1="0" y1="4" x2="16" y2="4" stroke="rgba(0,200,122,0.3)"/><line x1="0" y1="8" x2="16" y2="8" stroke="rgba(0,200,122,0.3)"/><line x1="5" y1="0" x2="5" y2="12" stroke="rgba(0,200,122,0.3)"/><line x1="11" y1="0" x2="11" y2="12" stroke="rgba(0,200,122,0.3)"/></svg>
+          </div>
+          <div class="vcard-num mono">•••• •••• •••• 4821</div>
+          <div class="vcard-meta"><span>Expires 08/27</span><span>HBL Platinum</span></div>
+          <div class="vcard-name">Ahmed Khan</div>
+          <div class="vcard-status"><span class="badge badge-green" style="font-size:10px;">Tokenized ✓</span></div>
+        </div>
+        <div class="row" style="margin-top:12px;">
+          <span style="font-size:13px;color:var(--text2);">Sharing enabled · 3 discounts</span>
+          <span class="badge badge-gray">Tap to manage</span>
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-full" onclick="showScreen('s-add-card')" style="font-size:13px;">+ Add another card</button>
+
+    </div>
+  </div>
+
+  <!-- ── SCREEN: CARD DETAIL ── -->
+  <div class="screen" id="s-card-detail">
+    <div class="topbar">
+      <button class="back-btn" onclick="showScreen('s-home')">← Back</button>
+      <h1 style="font-size:18px;">HBL Platinum</h1>
+    </div>
+    <div class="scroll-content">
+      <div class="vcard">
+        <div class="vcard-chip"><svg width="16" height="12" viewBox="0 0 16 12" fill="none"><rect x="0.5" y="0.5" width="15" height="11" rx="2" stroke="rgba(0,200,122,0.5)"/><line x1="0" y1="4" x2="16" y2="4" stroke="rgba(0,200,122,0.3)"/><line x1="0" y1="8" x2="16" y2="8" stroke="rgba(0,200,122,0.3)"/><line x1="5" y1="0" x2="5" y2="12" stroke="rgba(0,200,122,0.3)"/><line x1="11" y1="0" x2="11" y2="12" stroke="rgba(0,200,122,0.3)"/></svg></div>
+        <div class="vcard-num mono">•••• •••• •••• 4821</div>
+        <div class="vcard-meta"><span>Expires 08/27</span><span>HBL Bank</span></div>
+        <div class="vcard-name">Ahmed Khan</div>
+        <div class="vcard-status"><span class="badge badge-green" style="font-size:10px;">Tokenized ✓</span></div>
+      </div>
+
+      <div class="sec-label">Security model</div>
+      <div class="card">
+        <div class="sec-timeline">
+          <div class="sec-step">
+            <div class="sec-dot-col"><div class="sec-dot" style="background:var(--blue-dim);color:var(--blue);">1</div><div class="sec-line"></div></div>
+            <div class="sec-body"><div class="sec-title">Real card → Token</div><div class="sec-sub">Your PAN (card number) was replaced with a secure token via Stripe. Your real number lives only on Stripe's servers, never ours.</div><div style="margin-top:6px;"><span class="badge badge-green" style="font-size:11px;">tok_hbl_••••x9q2</span></div></div>
+          </div>
+          <div class="sec-step">
+            <div class="sec-dot-col"><div class="sec-dot" style="background:var(--amber-dim);color:var(--amber);">2</div><div class="sec-line"></div></div>
+            <div class="sec-body"><div class="sec-title">Token → Virtual card (per transaction)</div><div class="sec-sub">Each approved request generates a brand-new disposable virtual card. Locked to one merchant, one amount, expires in 15 minutes.</div></div>
+          </div>
+          <div class="sec-step">
+            <div class="sec-dot-col"><div class="sec-dot" style="background:var(--green-dim);color:var(--green);">3</div></div>
+            <div class="sec-body"><div class="sec-title">Virtual card auto-charges & expires</div><div class="sec-sub">Payment goes through. Virtual card immediately invalidated. Your incentive lands in your wallet. Full audit trail logged.</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sec-label">Sharing settings</div>
+      <div class="card" style="display:flex;flex-direction:column;gap:14px;">
+        <div class="row"><span style="font-size:14px;color:var(--text);">Allow requests</span><button class="toggle on" onclick="this.classList.toggle('on')"></button></div>
+        <div class="div" style="margin:0;"></div>
+        <div class="row"><span style="font-size:14px;color:var(--text);">Auto-approve trusted contacts</span><button class="toggle on" onclick="this.classList.toggle('on')"></button></div>
+        <div class="div" style="margin:0;"></div>
+        <div class="row"><span style="font-size:14px;color:var(--text);">Require biometric per approval</span><button class="toggle on" onclick="this.classList.toggle('on')"></button></div>
+        <div class="div" style="margin:0;"></div>
+        <div class="row"><span style="font-size:14px;color:var(--text);">Per-transaction limit</span><span style="font-size:14px;font-weight:500;color:var(--text);">PKR 5,000</span></div>
+        <div class="div" style="margin:0;"></div>
+        <div class="row"><span style="font-size:14px;color:var(--text);">Monthly cap</span><span style="font-size:14px;font-weight:500;color:var(--text);">PKR 20,000</span></div>
+        <div class="div" style="margin:0;"></div>
+        <div class="row"><span style="font-size:14px;color:var(--text);">Your incentive per txn</span><span style="font-size:14px;font-weight:500;color:var(--green);">PKR 80 fixed</span></div>
+      </div>
+
+      <div class="sec-label">Discounts on this card</div>
+      <div class="card" style="display:flex;flex-direction:column;gap:12px;">
+        <div class="row"><span style="font-size:14px;color:var(--text);">Netflix</span><span class="badge badge-green">30% off</span></div>
+        <div class="div" style="margin:0;"></div>
+        <div class="row"><span style="font-size:14px;color:var(--text);">Uber Eats</span><span class="badge badge-green">20% off</span></div>
+        <div class="div" style="margin:0;"></div>
+        <div class="row"><span style="font-size:14px;color:var(--text);">Careem</span><span class="badge badge-amber">PKR 200 off</span></div>
+        <div class="div" style="margin:0;"></div>
+        <button class="btn btn-ghost btn-full" style="font-size:13px;">+ Add discount</button>
+      </div>
+
+      <div class="sec-label">Active virtual cards</div>
+      <div class="card">
+        <div style="font-size:13px;color:var(--text2);margin-bottom:10px;">No active virtual cards right now. A new one is generated each time a payment is approved.</div>
+        <div style="display:flex;align-items:center;gap:8px;"><span class="sec-dot-green"></span><span style="font-size:12px;color:var(--text2);">Last used 2 hours ago · Netflix · PKR 1,470</span></div>
+      </div>
+
+      <button class="btn btn-danger btn-full">Freeze this card</button>
+    </div>
+  </div>
+
+  <!-- ── SCREEN: CIRCLE ── -->
+  <div class="screen" id="s-circle">
+    <div class="topbar">
+      <div class="topbar-logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="2" y="7" width="20" height="14" rx="3" stroke="black" stroke-width="2.5"/><path d="M16 7V6a4 4 0 0 0-8 0v1" stroke="black" stroke-width="2.5" stroke-linecap="round"/><circle cx="12" cy="14" r="2" fill="black"/></svg></div>
+      <h1>Trusted Circle</h1>
+      <button class="btn btn-primary" style="margin-left:auto;padding:8px 14px;font-size:12px;" onclick="showScreen('s-add-contact')">+ Add</button>
+    </div>
+    <div class="scroll-content">
+      <div class="card-sm" style="display:flex;align-items:center;gap:10px;">
+        <span class="sec-dot-green"></span>
+        <span style="font-size:13px;color:var(--text2);">Funds always collected upfront from your circle before your card is ever charged</span>
+      </div>
+      <div class="card">
+        <div class="contact-row" onclick="showScreen('s-contact-detail')">
+          <div class="av av-38 av-b">SH</div>
+          <div style="flex:1;"><div class="contact-name">Sara Hussain</div><div class="contact-sub">8 txns · PKR 640 earned · Auto-approve on</div></div>
+          <span class="badge badge-green">Active</span>
+        </div>
+        <div class="contact-row">
+          <div class="av av-38 av-p">FM</div>
+          <div style="flex:1;"><div class="contact-name">Faraz Mahmood</div><div class="contact-sub">3 txns · PKR 240 earned</div></div>
+          <span class="badge badge-green">Active</span>
+        </div>
+        <div class="contact-row">
+          <div class="av av-38 av-a">ZA</div>
+          <div style="flex:1;"><div class="contact-name">Zara Ahmed</div><div class="contact-sub">Invite sent · pending acceptance</div></div>
+          <span class="badge badge-gray">Pending</span>
+        </div>
+        <div class="contact-row" style="border-bottom:none;">
+          <div class="av av-38 av-r">RI</div>
+          <div style="flex:1;"><div class="contact-name">Raza Iqbal</div><div class="contact-sub">1 txn · PKR 80 earned</div></div>
+          <span class="badge badge-green">Active</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SCREEN: CONTACT DETAIL ── -->
+  <div class="screen" id="s-contact-detail">
+    <div class="topbar">
+      <button class="back-btn" onclick="showScreen('s-circle')">← Back</button>
+      <h1 style="font-size:18px;">Sara Hussain</h1>
+    </div>
+    <div class="scroll-content">
+      <div class="card" style="display:flex;align-items:center;gap:14px;">
+        <div class="av av-52 av-b">SH</div>
+        <div>
+          <div style="font-family:'Syne',sans-serif;font-size:18px;font-weight:600;color:var(--text);">Sara Hussain</div>
+          <div style="font-size:13px;color:var(--text2);margin-top:2px;">+92 321 ••••789</div>
+          <div style="margin-top:8px;"><span class="badge badge-green">⚡ Auto-approve on</span></div>
+        </div>
+      </div>
+      <div class="stats-row">
+        <div class="stat-box"><div class="stat-val">8</div><div class="stat-lbl">Transactions</div></div>
+        <div class="stat-box"><div class="stat-val" style="color:var(--green);">PKR 640</div><div class="stat-lbl">You earned</div></div>
+        <div class="stat-box"><div class="stat-val">PKR 5,040</div><div class="stat-lbl">She saved</div></div>
+      </div>
+      <div class="sec-label">Permissions</div>
+      <div class="card" style="display:flex;flex-direction:column;gap:14px;">
+        <div class="row"><span style="font-size:14px;color:var(--text);">Auto-approve her requests</span><button class="toggle on" onclick="this.classList.toggle('on')"></button></div>
+        <div class="div" style="margin:0;"></div>
+        <div class="row"><span style="font-size:14px;color:var(--text);">Cards she can access</span><span class="badge badge-blue">HBL only</span></div>
+        <div class="div" style="margin:0;"></div>
+        <div class="row"><span style="font-size:14px;color:var(--text);">Her per-transaction limit</span><span style="font-size:14px;font-weight:500;color:var(--text);">PKR 3,000</span></div>
+        <div class="div" style="margin:0;"></div>
+        <div class="row"><span style="font-size:14px;color:var(--text);">Monthly limit for her</span><span style="font-size:14px;font-weight:500;color:var(--text);">PKR 10,000</span></div>
+      </div>
+      <div class="sec-label">Recent transactions</div>
+      <div class="card">
+        <div class="hist-row">
+          <div class="hist-icon" style="background:rgba(229,9,20,0.12);">▶</div>
+          <div style="flex:1;margin-left:10px;"><div class="hist-name">Netflix</div><div class="hist-sub">2 Apr · Virtual card · 15 min window</div></div>
+          <div><div class="hist-amt" style="color:var(--green);">+PKR 80</div><div style="font-size:11px;color:var(--text3);text-align:right;">earned</div></div>
+        </div>
+        <div class="hist-row" style="border-bottom:none;">
+          <div class="hist-icon" style="background:rgba(229,9,20,0.12);">▶</div>
+          <div style="flex:1;margin-left:10px;"><div class="hist-name">Netflix</div><div class="hist-sub">15 Mar · Virtual card · auto-charged</div></div>
+          <div><div class="hist-amt" style="color:var(--green);">+PKR 80</div><div style="font-size:11px;color:var(--text3);text-align:right;">earned</div></div>
+        </div>
+      </div>
+      <button class="btn btn-danger btn-full">Remove from circle</button>
+    </div>
+  </div>
+
+  <!-- ── SCREEN: REQUEST ── -->
+  <div class="screen" id="s-request">
+    <div class="topbar">
+      <div class="topbar-logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="2" y="7" width="20" height="14" rx="3" stroke="black" stroke-width="2.5"/><path d="M16 7V6a4 4 0 0 0-8 0v1" stroke="black" stroke-width="2.5" stroke-linecap="round"/><circle cx="12" cy="14" r="2" fill="black"/></svg></div>
+      <h1>Request discount</h1>
+    </div>
+    <div class="scroll-content">
+      <div class="card-sm" style="display:flex;align-items:center;gap:10px;">
+        <span class="badge badge-blue" style="font-size:10px;">How it works</span>
+        <span style="font-size:12px;color:var(--text2);">You pay first · they approve · virtual card charges · you save</span>
+      </div>
+
+      <div class="sec-label">Who has the discount?</div>
+      <div class="card" id="contact-select">
+        <div class="contact-row" onclick="selectContact(this,'Sara','SH','av-b','HBL Platinum','Netflix 30% off',30)" style="cursor:pointer;">
+          <div class="av av-38 av-b">SH</div>
+          <div style="flex:1;"><div class="contact-name">Sara Hussain</div><div class="contact-sub">HBL Platinum · Netflix 30% off</div></div>
+          <span class="badge badge-gray">2 cards</span>
+        </div>
+        <div class="contact-row" onclick="selectContact(this,'Faraz','FM','av-p','MCB Visa','Daraz 15% off',15)" style="cursor:pointer;border-bottom:none;">
+          <div class="av av-38 av-p">FM</div>
+          <div style="flex:1;"><div class="contact-name">Faraz Mahmood</div><div class="contact-sub">MCB Visa · Daraz 15% off</div></div>
+          <span class="badge badge-gray">1 card</span>
+        </div>
+      </div>
+
+      <div id="req-form" style="display:none;flex-direction:column;gap:14px;">
+        <div class="card" id="selected-contact-card"></div>
+        <div class="inp-group"><div class="inp-label">Merchant</div><input class="inp" placeholder="e.g. Netflix, Daraz, Grab" id="f-merchant"/></div>
+        <div class="inp-group"><div class="inp-label">Full price (PKR)</div><input class="inp" type="number" placeholder="e.g. 2100" id="f-price" oninput="recalc()"/></div>
+        <div id="req-breakdown-box" style="display:none;">
+          <div class="breakdown">
+            <div class="br-row"><span class="br-label">Original price</span><span class="br-val" id="b-orig"></span></div>
+            <div class="br-row"><span class="br-label">Discount (<span id="b-pct"></span>%)</span><span class="br-val" style="color:var(--green);" id="b-disc"></span></div>
+            <div class="br-row"><span class="br-label">Discounted price</span><span class="br-val" id="b-price"></span></div>
+            <div class="br-row"><span class="br-label">Platform fee</span><span class="br-val" style="color:var(--amber);">PKR 150</span></div>
+            <div class="br-row"><span class="br-label">Card holder incentive</span><span class="br-val" style="color:var(--amber);">PKR 80</span></div>
+          </div>
+          <div class="br-total"><span>You pay total</span><span id="b-total"></span></div>
+          <div style="margin-top:8px;display:flex;align-items:center;gap:8px;"><span class="badge badge-green" style="font-size:11px;">You save</span><span id="b-save" style="font-size:14px;font-weight:500;color:var(--green);"></span></div>
+        </div>
+        <div class="inp-group"><div class="inp-label">Note (optional)</div><input class="inp" placeholder="e.g. Monthly Netflix sub" id="f-note"/></div>
+        <button class="btn btn-primary btn-full" onclick="sendRequest()" style="font-size:15px;padding:14px;">Pay & send request</button>
+        <div style="font-size:12px;color:var(--text3);text-align:center;line-height:1.6;">Your payment is held in escrow. Released only after the virtual card charges successfully. Full refund if declined.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SCREEN: HISTORY ── -->
+  <div class="screen" id="s-history">
+    <div class="topbar">
+      <div class="topbar-logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="2" y="7" width="20" height="14" rx="3" stroke="black" stroke-width="2.5"/><path d="M16 7V6a4 4 0 0 0-8 0v1" stroke="black" stroke-width="2.5" stroke-linecap="round"/><circle cx="12" cy="14" r="2" fill="black"/></svg></div>
+      <h1>History</h1>
+    </div>
+    <div class="scroll-content">
+      <div class="stats-row">
+        <div class="stat-box"><div class="stat-val" style="color:var(--green);">PKR 1,840</div><div class="stat-lbl">Total earned</div></div>
+        <div class="stat-box"><div class="stat-val" style="color:var(--green);">PKR 950</div><div class="stat-lbl">Total saved</div></div>
+      </div>
+      <div class="sec-label">April 2026</div>
+      <div class="card">
+        <div class="hist-row">
+          <div class="hist-icon" style="background:rgba(229,9,20,0.12);">▶</div>
+          <div style="flex:1;margin-left:10px;"><div class="hist-name">Netflix</div><div class="hist-sub">Sara used your HBL · Virtual card · Apr 2</div></div>
+          <div style="text-align:right;"><div class="hist-amt" style="color:var(--green);">+PKR 80</div><div style="font-size:11px;color:var(--text3);">earned</div></div>
+        </div>
+        <div class="hist-row">
+          <div class="hist-icon" style="background:rgba(77,166,255,0.1);">🛍</div>
+          <div style="flex:1;margin-left:10px;"><div class="hist-name">Daraz</div><div class="hist-sub">You used Faraz's MCB · Apr 1 · saved 15%</div></div>
+          <div style="text-align:right;"><div class="hist-amt" style="color:var(--text);">PKR 2,040</div><div style="font-size:11px;color:var(--green);">saved PKR 360</div></div>
+        </div>
+        <div class="hist-row">
+          <div class="hist-icon" style="background:rgba(0,200,122,0.1);">🚗</div>
+          <div style="flex:1;margin-left:10px;"><div class="hist-name">Careem</div>
+          <div class="hist-sub">Raza used your HBL · Mar 28</div></div>
+          <div style="text-align:right;"><div class="hist-amt" style="color:var(--green);">+PKR 80</div><div style="font-size:11px;color:var(--text3);">earned</div></div>
+        </div>
+        <div class="hist-row" style="border-bottom:none;">
+          <div class="hist-icon" style="background:rgba(229,9,20,0.12);">▶</div>
+          <div style="flex:1;margin-left:10px;"><div class="hist-name">Netflix</div><div class="hist-sub">Sara used your HBL · Mar 15</div></div>
+          <div style="text-align:right;"><div class="hist-amt" style="color:var(--green);">+PKR 80</div><div style="font-size:11px;color:var(--text3);">earned</div></div>
+        </div>
+      </div>
+      <div class="sec-label">March 2026</div>
+      <div class="card">
+        <div class="hist-row">
+          <div class="hist-icon" style="background:rgba(77,166,255,0.1);">🛒</div>
+          <div style="flex:1;margin-left:10px;"><div class="hist-name">Noon</div><div class="hist-sub">Sara used your HBL · Mar 10</div></div>
+          <div style="text-align:right;"><div class="hist-amt" style="color:var(--green);">+PKR 80</div><div style="font-size:11px;color:var(--text3);">earned</div></div>
+        </div>
+        <div class="hist-row" style="border-bottom:none;">
+          <div class="hist-icon" style="background:rgba(0,200,122,0.1);">🍔</div>
+          <div style="flex:1;margin-left:10px;"><div class="hist-name">Uber Eats</div><div class="hist-sub">You used Sara's HBL · Mar 5 · saved 20%</div></div>
+          <div style="text-align:right;"><div class="hist-amt" style="color:var(--text);">PKR 960</div><div style="font-size:11px;color:var(--green);">saved PKR 240</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SCREEN: ADD CONTACT ── -->
+  <div class="screen" id="s-add-contact">
+    <div class="topbar">
+      <button class="back-btn" onclick="showScreen('s-circle')">← Back</button>
+      <h1 style="font-size:18px;">Add to circle</h1>
+    </div>
+    <div class="scroll-content">
+      <div class="inp-group"><div class="inp-label">Phone number</div><input class="inp" placeholder="+92 3xx xxxxxxx" type="tel"/></div>
+      <div class="inp-group"><div class="inp-label">Nickname</div><input class="inp" placeholder="e.g. Sara, Brother, Mom"/></div>
+      <div class="sec-label">Default permissions</div>
+      <div class="card" style="display:flex;flex-direction:column;gap:14px;">
+        <div class="row"><span style="font-size:14px;color:var(--text);">Auto-approve requests</span><button class="toggle" onclick="this.classList.toggle('on')"></button></div>
+        <div class="div" style="margin:0;"></div>
+        <div class="row"><span style="font-size:14px;color:var(--text);">Per-transaction limit</span><input class="inp" style="width:130px;padding:8px 12px;" value="5000" type="number"/></div>
+      </div>
+      <div class="card-sm" style="display:flex;gap:10px;align-items:flex-start;">
+        <span style="font-size:16px;">🔒</span>
+        <span style="font-size:12px;color:var(--text2);line-height:1.6;">They'll receive an invite. Once accepted, they can request your cards. Their payment is always collected before your card is charged.</span>
+      </div>
+      <button class="btn btn-primary btn-full" onclick="showToast('Invite sent!','success');showScreen('s-circle');" style="font-size:15px;padding:14px;">Send invite</button>
+    </div>
+  </div>
+
+  <!-- ── SCREEN: ADD CARD ── -->
+  <div class="screen" id="s-add-card">
+    <div class="topbar">
+      <button class="back-btn" onclick="showScreen('s-home')">← Back</button>
+      <h1 style="font-size:18px;">Add a card</h1>
+    </div>
+    <div class="scroll-content">
+      <div class="card-sm" style="display:flex;gap:10px;align-items:flex-start;">
+        <span style="font-size:16px;">🔐</span>
+        <span style="font-size:12px;color:var(--text2);line-height:1.6;">Your card details go directly to Stripe's secure servers. We receive only a token — your real card number never touches our systems.</span>
+      </div>
+      <div class="inp-group"><div class="inp-label">Card number</div><input class="inp" placeholder="•••• •••• •••• ••••" maxlength="19" id="card-num-inp" oninput="formatCardNum(this)"/></div>
+      <div style="display:flex;gap:10px;">
+        <div class="inp-group" style="flex:1;"><div class="inp-label">Expiry</div><input class="inp" placeholder="MM/YY" maxlength="5"/></div>
+        <div class="inp-group" style="flex:1;"><div class="inp-label">CVV</div><input class="inp" placeholder="•••" maxlength="3" type="password"/></div>
+      </div>
+      <div class="inp-group"><div class="inp-label">Name on card</div><input class="inp" placeholder="Ahmed Khan"/></div>
+      <div class="inp-group"><div class="inp-label">Bank name</div><input class="inp" placeholder="HBL, MCB, UBL, Meezan…"/></div>
+      <div class="sec-label">Discounts on this card</div>
+      <div class="card" style="display:flex;flex-direction:column;gap:10px;">
+        <div style="font-size:13px;color:var(--text2);">Add the discounts your card offers so your circle can find them</div>
+        <button class="btn btn-ghost btn-full" style="font-size:13px;">+ Add discount offer</button>
+      </div>
+      <button class="btn btn-primary btn-full" onclick="showToast('Card tokenized & added ✓','success');showScreen('s-home');" style="font-size:15px;padding:14px;">Tokenize & save card</button>
+    </div>
+  </div>
+
+  <!-- ── SCREEN: PROFILE ── -->
+  <div class="screen" id="s-profile">
+    <div class="topbar">
+      <button class="back-btn" onclick="showScreen('s-home')">← Back</button>
+      <h1 style="font-size:18px;">Profile</h1>
+    </div>
+    <div class="scroll-content">
+      <div class="card" style="display:flex;align-items:center;gap:14px;">
+        <div class="av av-52 av-g">AK</div>
+        <div>
+          <div style="font-family:'Syne',sans-serif;font-size:18px;font-weight:600;color:var(--text);">Ahmed Khan</div>
+          <div style="font-size:13px;color:var(--text2);margin-top:2px;">+92 321 4567890</div>
+          <div style="margin-top:8px;"><span class="badge badge-green">KYC verified ✓</span></div>
+        </div>
+      </div>
+      <div class="sec-label">Security</div>
+      <div class="card" style="display:flex;flex-direction:column;gap:14px;">
+        <div class="row"><span style="font-size:14px;color:var(--text);">Biometric login</span><button class="toggle on" onclick="this.classList.toggle('on')"></button></div>
+        <div class="div" style="margin:0;"></div>
+        <div class="row"><span style="font-size:14px;color:var(--text);">Transaction PIN</span><span class="badge badge-green">Set</span></div>
+        <div class="div" style="margin:0;"></div>
+        <div class="row"><span style="font-size:14px;color:var(--text);">Device binding</span><span class="badge badge-green">This device ✓</span></div>
+        <div class="div" style="margin:0;"></div>
+        <div class="row"><span style="font-size:14px;color:var(--text);">Two-factor auth</span><button class="toggle on" onclick="this.classList.toggle('on')"></button></div>
+      </div>
+      <div class="sec-label">Wallet</div>
+      <div class="card" style="display:flex;flex-direction:column;gap:14px;">
+        <div class="row"><span style="font-size:14px;color:var(--text);">Balance</span><span style="font-family:'Syne',sans-serif;font-size:18px;font-weight:600;color:var(--green);">PKR 1,840</span></div>
+        <div class="div" style="margin:0;"></div>
+        <button class="btn btn-ghost btn-full" style="font-size:13px;">Withdraw to bank account</button>
+      </div>
+      <div class="sec-label">Account</div>
+      <div class="card" style="display:flex;flex-direction:column;gap:14px;">
+        <div class="row" style="cursor:pointer;"><span style="font-size:14px;color:var(--text);">Privacy policy</span><span style="color:var(--text3);">›</span></div>
+        <div class="div" style="margin:0;"></div>
+        <div class="row" style="cursor:pointer;"><span style="font-size:14px;color:var(--text);">Terms of service</span><span style="color:var(--text3);">›</span></div>
+        <div class="div" style="margin:0;"></div>
+        <div class="row" style="cursor:pointer;"><span style="font-size:14px;color:var(--text);">Contact support</span><span style="color:var(--text3);">›</span></div>
+      </div>
+      <button class="btn btn-danger btn-full">Sign out</button>
+    </div>
+  </div>
+
+  <!-- ── BOTTOM NAV ── -->
+  <nav class="nav" id="main-nav">
+    <div class="nav-item active" id="nav-home" onclick="navTo('s-home','nav-home')">
+      <div class="nav-ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V9.5z" stroke="#535A63" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 21V12h6v9" stroke="#535A63" stroke-width="1.8" stroke-linejoin="round"/></svg></div>
+      <span class="nav-lbl">Home</span>
+    </div>
+    <div class="nav-item" id="nav-circle" onclick="navTo('s-circle','nav-circle')">
+      <div class="nav-ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><circle cx="9" cy="8" r="3" stroke="#535A63" stroke-width="1.8"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="#535A63" stroke-width="1.8" stroke-linecap="round"/><path d="M16 6c1.7 0 3 1.3 3 3s-1.3 3-3 3" stroke="#535A63" stroke-width="1.8" stroke-linecap="round"/><path d="M18 17c1.7.6 3 2.3 3 4" stroke="#535A63" stroke-width="1.8" stroke-linecap="round"/></svg></div>
+      <span class="nav-lbl">Circle</span>
+    </div>
+    <div class="nav-item" id="nav-request" onclick="navTo('s-request','nav-request')">
+      <div class="nav-ic-wrap nav-ic">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><rect x="2" y="7" width="20" height="14" rx="3" stroke="#535A63" stroke-width="1.8"/><path d="M16 7V6a4 4 0 0 0-8 0v1" stroke="#535A63" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="14" r="2" stroke="#535A63" stroke-width="1.8"/></svg>
+        <span class="nav-dot"></span>
+      </div>
+      <span class="nav-lbl">Request</span>
+    </div>
+    <div class="nav-item" id="nav-history" onclick="navTo('s-history','nav-history')">
+      <div class="nav-ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 8v4l3 3" stroke="#535A63" stroke-width="1.8" stroke-linecap="round"/><path d="M3.05 11a9 9 0 1 0 .49-3" stroke="#535A63" stroke-width="1.8" stroke-linecap="round"/><path d="M3 4v4h4" stroke="#535A63" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <span class="nav-lbl">History</span>
+    </div>
+  </nav>
+
+  <!-- ── APPROVE MODAL ── -->
+  <div class="modal-overlay" id="approve-modal">
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-title">Generating virtual card…</div>
+      <div id="modal-stage-1">
+        <div class="sec-timeline" style="margin-bottom:20px;">
+          <div class="sec-step"><div class="sec-dot-col"><div class="sec-dot" style="background:var(--green-dim);color:var(--green);" id="ms1">✓</div><div class="sec-line"></div></div><div class="sec-body"><div class="sec-title">Escrow verified</div><div class="sec-sub">Sara's PKR 1,700 confirmed held</div></div></div>
+          <div class="sec-step"><div class="sec-dot-col"><div class="sec-dot" style="background:var(--amber-dim);color:var(--amber);" id="ms2">2</div><div class="sec-line"></div></div><div class="sec-body"><div class="sec-title">Generating virtual card token</div><div class="sec-sub" id="vcard-gen-sub">Creating one-time card…</div></div></div>
+          <div class="sec-step"><div class="sec-dot-col"><div class="sec-dot" style="background:var(--bg4);color:var(--text3);" id="ms3">3</div></div><div class="sec-body"><div class="sec-title">Auto-charge card</div><div class="sec-sub">Will trigger once token is ready</div></div></div>
+        </div>
+        <div id="vcard-display" style="display:none;" class="fade-in-up">
+          <div class="vcard" style="margin-bottom:14px;">
+            <div class="vcard-chip"><svg width="16" height="12" viewBox="0 0 16 12" fill="none"><rect x="0.5" y="0.5" width="15" height="11" rx="2" stroke="rgba(0,200,122,0.5)"/><line x1="0" y1="4" x2="16" y2="4" stroke="rgba(0,200,122,0.3)"/><line x1="0" y1="8" x2="16" y2="8" stroke="rgba(0,200,122,0.3)"/><line x1="5" y1="0" x2="5" y2="12" stroke="rgba(0,200,122,0.3)"/><line x1="11" y1="0" x2="11" y2="12" stroke="rgba(0,200,122,0.3)"/></svg></div>
+            <div class="vcard-num mono" id="vc-num">5412 7531 8890 2241</div>
+            <div class="vcard-meta"><span id="vc-exp">Expires in 15:00</span><span>Netflix only · PKR 1,470</span></div>
+            <div class="vcard-name">Virtual · Single use</div>
+            <div class="vcard-status"><span class="badge badge-green" style="font-size:10px;"><span class="sec-dot-green"></span> Live</span></div>
+            <div class="vcard-expiry-bar"><div style="font-size:11px;color:rgba(255,255,255,0.4);margin-bottom:4px;">Expires in</div><div class="expiry-track"><div class="expiry-fill" id="expiry-fill" style="width:100%;"></div></div></div>
+          </div>
+          <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:14px;line-height:1.6;">Charging PKR 1,470 to this virtual card now. It expires in 15 minutes or immediately after use.</div>
+        </div>
+        <div id="modal-done" style="display:none;" class="fade-in-up">
+          <div style="text-align:center;padding:10px 0 20px;">
+            <div style="font-size:36px;margin-bottom:10px;">✅</div>
+            <div style="font-family:'Syne',sans-serif;font-size:20px;font-weight:700;color:var(--text);margin-bottom:6px;">All done!</div>
+            <div style="font-size:14px;color:var(--text2);margin-bottom:4px;">PKR 1,470 charged · Virtual card expired</div>
+            <div style="font-size:15px;color:var(--green);font-weight:500;">+PKR 80 added to your wallet</div>
+          </div>
+          <button class="btn btn-primary btn-full" onclick="closeModal()" style="font-size:15px;padding:14px;">Done</button>
+        </div>
+        <div id="modal-cta" style="">
+          <button class="btn btn-primary btn-full" onclick="runApproval()" style="font-size:15px;padding:14px;">Confirm with Face ID</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- .shell -->
+
+<div id="toast"></div>
+
+<script>
+let currentScreen = 's-onboard';
+let currentNav = null;
+let selectedDiscount = 30;
+let modalStep = 0;
+
+function showScreen(id) {
+  const cur = document.getElementById(currentScreen);
+  if (cur) { cur.classList.add('exit'); setTimeout(() => { cur.classList.remove('active','exit'); }, 280); }
+  setTimeout(() => {
+    const next = document.getElementById(id);
+    if (next) { next.classList.add('active'); }
+  }, 50);
+  currentScreen = id;
+  const navScreens = ['s-home','s-circle','s-request','s-history'];
+  document.getElementById('main-nav').style.display = navScreens.includes(id) ? 'flex' : 'none';
+}
+
+function navTo(screenId, navId) {
+  showScreen(screenId);
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById(navId).classList.add('active');
+}
+
+function showToast(msg, type) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'show ' + (type || '');
+  setTimeout(() => { t.className = ''; }, 2800);
+}
+
+function doDecline() { showToast('Request declined', 'error'); }
+
+function showApproveModal() {
+  modalStep = 0;
+  document.getElementById('modal-cta').style.display = '';
+  document.getElementById('vcard-display').style.display = 'none';
+  document.getElementById('modal-done').style.display = 'none';
+  document.getElementById('ms2').style.background = 'var(--amber-dim)';
+  document.getElementById('ms2').style.color = 'var(--amber)';
+  document.getElementById('ms3').style.background = 'var(--bg4)';
+  document.getElementById('ms3').style.color = 'var(--text3)';
+  document.getElementById('ms3').textContent = '3';
+  document.getElementById('approve-modal').classList.add('open');
+}
+
+function runApproval() {
+  document.getElementById('modal-cta').style.display = 'none';
+  document.getElementById('vcard-gen-sub').textContent = 'Generating secure token…';
+  setTimeout(() => {
+    document.getElementById('ms2').textContent = '✓';
+    document.getElementById('ms2').style.background = 'var(--green-dim)';
+    document.getElementById('ms2').style.color = 'var(--green)';
+    document.getElementById('vcard-gen-sub').textContent = 'Token created: vc_5412•••2241';
+    document.getElementById('ms3').style.background = 'var(--amber-dim)';
+    document.getElementById('ms3').style.color = 'var(--amber)';
+    document.getElementById('ms3').textContent = '⚡';
+    document.getElementById('vcard-display').style.display = 'block';
+    startExpiryTimer();
+    setTimeout(() => {
+      document.getElementById('ms3').textContent = '✓';
+      document.getElementById('ms3').style.background = 'var(--green-dim)';
+      document.getElementById('ms3').style.color = 'var(--green)';
+      document.getElementById('vcard-display').style.display = 'none';
+      document.getElementById('modal-done').style.display = 'block';
+    }, 3000);
+  }, 1500);
+}
+
+let expiryTimer;
+function startExpiryTimer() {
+  let pct = 100;
+  clearInterval(expiryTimer);
+  expiryTimer = setInterval(() => {
+    pct -= 2;
+    const fill = document.getElementById('expiry-fill');
+    if (fill) fill.style.width = Math.max(0, pct) + '%';
+    if (fill && pct <= 30) fill.style.background = 'var(--amber)';
+    if (pct <= 0) clearInterval(expiryTimer);
+  }, 60);
+}
+
+function closeModal() {
+  document.getElementById('approve-modal').classList.remove('open');
+  clearInterval(expiryTimer);
+  showToast('+PKR 80 added to wallet ✓', 'success');
+}
+
+function selectContact(el, name, initials, avClass, card, discount, pct) {
+  document.querySelectorAll('#contact-select .contact-row').forEach(r => r.style.background = '');
+  el.style.background = 'var(--bg3)';
+  selectedDiscount = pct;
+  const cc = document.getElementById('selected-contact-card');
+  cc.innerHTML = `<div style="display:flex;align-items:center;gap:12px;"><div class="av av-38 ${avClass}">${initials}</div><div><div style="font-size:14px;font-weight:500;color:var(--text);">${name}</div><div style="font-size:12px;color:var(--text2);margin-top:2px;">${card} · ${discount}</div></div><span class="badge badge-green" style="margin-left:auto;">Selected</span></div>`;
+  document.getElementById('req-form').style.display = 'flex';
+  recalc();
+}
+
+function recalc() {
+  const full = parseFloat(document.getElementById('f-price').value);
+  if (!full || full <= 0) { document.getElementById('req-breakdown-box').style.display = 'none'; return; }
+  const disc = Math.round(full * selectedDiscount / 100);
+  const discPrice = full - disc;
+  const total = discPrice + 150 + 80;
+  const save = full - total;
+  document.getElementById('b-orig').textContent = 'PKR ' + full.toLocaleString();
+  document.getElementById('b-pct').textContent = selectedDiscount;
+  document.getElementById('b-disc').textContent = '- PKR ' + disc.toLocaleString();
+  document.getElementById('b-price').textContent = 'PKR ' + discPrice.toLocaleString();
+  document.getElementById('b-total').textContent = 'PKR ' + total.toLocaleString();
+  document.getElementById('b-save').textContent = save > 0 ? 'PKR ' + Math.round(save).toLocaleString() : 'PKR 0';
+  document.getElementById('req-breakdown-box').style.display = 'block';
+}
+
+function sendRequest() {
+  const merchant = document.getElementById('f-merchant').value;
+  const price = document.getElementById('f-price').value;
+  if (!merchant || !price) { showToast('Please fill all fields', 'error'); return; }
+  showToast('Payment held in escrow · Request sent!', 'success');
+  setTimeout(() => navTo('s-home','nav-home'), 800);
+}
+
+function doOTP() {
+  const boxes = document.querySelectorAll('.otp-box');
+  boxes.forEach((b,i) => { setTimeout(() => { b.textContent = [4,2,0,1,9,3][i]; b.classList.add('filled'); }, i * 80); });
+  setTimeout(() => { showScreen('s-home'); document.getElementById('main-nav').style.display = 'flex'; }, 700);
+}
+
+function formatCardNum(inp) {
+  let v = inp.value.replace(/\D/g,'').substring(0,16);
+  inp.value = v.replace(/(.{4})/g,'$1 ').trim();
+}
+
+// Hide nav on non-main screens initially
+document.getElementById('main-nav').style.display = 'none';
+</script>
+</body>
+</html>
