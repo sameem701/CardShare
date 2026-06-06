@@ -1,0 +1,97 @@
+CardCircle V1 — Logic & Decision Log
+
+The App
+Trust-based platform where people share bank card discounts within their personal circle. Sara wants to use a discount she doesn't have a card for. Ahmed has the card, places the order on Sara's behalf, earns a small fee. Money is held in escrow and released once Sara confirms the tracking ID.
+
+
+
+Database Decisions
+
+**Users table is minimal**
+Stripped out trust_score, trust_count, strike_count, total_earned, total_saved, profile_picture, bio, city, initials, username. This is a financial app not Instagram. Only keep what the core flow actually needs.
+
+**OTPs table uses phone as primary key**
+You never look up an OTP by UUID. Phone is always the lookup key. One row per phone enforced at schema level. Row deleted on successful verification — no stale rows, no is_used flag needed.
+
+**Cards table is simple**
+Dropped per_txn_limit, monthly_cap, is_frozen, is_active — all leftovers from the virtual card idea which was scrapped. Ahmed never hands over his card, he places orders himself. Only allow_sharing matters — controls whether his circle can see the card.
+
+**Discounts table dropped entirely**
+Originally meant for a deal feed where Ahmed posts discounts. Dropped because we decided Sara initiates requests directly without browsing a feed. Simpler flow, less to build.
+
+**Circle uses composite primary key**
+(user_id, friend_id) is already unique so a separate UUID id column is pointless. Made it the primary key instead. Bidirectional duplicate prevention handled in the add_to_circle procedure — checks both directions before inserting.
+
+**Requests and transactions are separate tables**
+A request might never become a transaction — Ahmed might decline, it might expire. So they're separate. Request is created when Sara initiates. Transaction is only created when escrow is locked — meaning Sara has actually paid.
+
+**No disputes table**
+Trusted circle of friends and family. Major disputes unlikely. Timers handle edge cases automatically — request expires if Ahmed doesn't respond, escrow auto releases if Ahmed doesn't submit tracking.
+
+**No notifications table**
+Push notifications only via Firebase FCM. No need to store notification history for V1.
+
+**Chat messages linked to request not transaction**
+Chat can happen from the moment a request is accepted, before a transaction exists. So chat_messages references request_id.
+
+
+
+Auth Decisions
+
+**OTP only for first time and forgot PIN**
+Every subsequent login uses PIN. Same as Easypaisa and JazzCash. OTP every time would be annoying for a financial app people open regularly.
+
+**PIN stored as hash on users table**
+Single upsert_pin procedure handles both first time setup and reset after forgot PIN flow.
+
+**Security question is optional**
+Dropdown of fixed questions, answer stored as hash. Only shown during forgot PIN flow if the user has set it. Protects against phone theft — thief can't answer the security question even if OTP arrives on the stolen phone.
+
+**No refresh tokens**
+Session timeout is frontend logic entirely. App tracks last activity timestamp and background timestamp. If inactive for 5-10 mins or backgrounded for 5-10 mins, frontend deletes the JWT and shows login screen. App closed means immediate re-login required. JWT access token is short lived at 15 mins as ultimate safety net.
+
+**No biometrics**
+Adds native module complexity not worth it for MVP. Security question covers the theft scenario adequately since thieves are strangers who won't know your favourite team.
+
+
+
+Transaction Flow Decisions
+
+**Escrow locks after Ahmed accepts, not when Sara creates request**
+If Sara's money locked immediately on request creation, every decline or expiry would require a refund. Unnecessary money movement. Money only moves when Ahmed has confirmed he will place the order.
+
+**Sara has 30 mins to lock escrow after Ahmed accepts**
+Protects Ahmed from being stuck in accepted state indefinitely. If Sara doesn't pay within 30 mins, request auto expires and Ahmed is free.
+
+**Ahmed has 1 hour to submit tracking after escrow locks**
+If Ahmed takes the money but never places the order, escrow auto releases back to Sara after 1 hour. Protects Sara.
+
+**Sara confirms tracking not delivery**
+Originally confirm_delivery but changed — waiting for physical delivery could take days or weeks. Ahmed should get paid as soon as he proves the order was placed. Sara reviews the tracking ID and confirms it looks legitimate, escrow releases immediately.
+
+**One active request at a time for Sara**
+Across her entire circle, not just per person. Main reason is escrow — if Sara has two active requests and both get accepted, she might not have enough balance to lock escrow for both. Simpler to enforce one at a time and open it up in V2 if needed.
+
+**Fees calculated at escrow lock time**
+2% platform fee, 3% incentive for Ahmed, stored as fixed values on the transaction row. Calculated in lock_escrow procedure so there's no ambiguity later. Ahmed's payout is total_paid minus platform_fee.
+
+**Request expires in 15 mins**
+Ahmed has 15 mins to respond to a request. Keeps the flow moving, Sara isn't waiting hours for a response.
+
+
+
+Background Jobs (Node cron)
+
+**auto_expire_requests** runs every minute
+- Expires pending requests older than 15 mins
+- Expires accepted requests where Sara hasn't locked escrow within 30 mins
+
+**auto_release_escrow** runs every minute
+- Finds transactions stuck in escrow_locked for over 1 hour
+- Refunds Sara's wallet
+- Marks transaction as refunded, request as expired
+
+
+
+V2 Notes
+The core mechanic — trusted circle, escrow, coordination layer — is the real asset. Online card discounts in Pakistan are currently thin, mostly physical/in-store which don't fit the remote model. V2 directions worth exploring: group buying, proxy purchasing, bill splitting with escrow, service marketplace within circle. Decision deferred until V1 validates the core loop.
