@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS users (
   pin_hash TEXT, 
   wallet_balance  INT NOT NULL DEFAULT 0,
   security_question    TEXT,
-  security_answer_hash TEXT
+  security_answer_hash TEXT,
   created_at      BIGINT NOT NULL
 );
 
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS cards (
 CREATE TABLE IF NOT EXISTS circle (
   user_id     VARCHAR(36) NOT NULL REFERENCES users(id),
   friend_id   VARCHAR(36) NOT NULL REFERENCES users(id),
-  c_status      VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined')),
+  c_status      VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (c_status IN ('pending', 'accepted', 'declined')),
   created_at  BIGINT NOT NULL,
   PRIMARY KEY (user_id, friend_id)
 );
@@ -302,11 +302,12 @@ CREATE OR REPLACE PROCEDURE store_otp(
   p_expires_at BIGINT
 ) AS $$
 BEGIN
-  INSERT INTO otps (phone, otp_hash, expires_at, attempts)
-  VALUES (p_phone, p_otp_hash, p_expires_at, 0)
+  INSERT INTO otps (phone, otp_hash, expires_at, last_sent_at, attempts)
+  VALUES (p_phone, p_otp_hash, p_expires_at, extract(epoch from now()) * 1000, 0)
   ON CONFLICT (phone) DO UPDATE
   SET otp_hash = p_otp_hash,
       expires_at = p_expires_at,
+      last_sent_at = extract(epoch from now()) * 1000,
       attempts = 0;
 END;
 $$ LANGUAGE plpgsql;
@@ -477,53 +478,115 @@ $$ LANGUAGE plpgsql;
 
 
 -- Auto Expire Requests
+-- Expires pending requests after 15 mins if Ahmed does not respond
+-- Expires accepted requests after 15 mins if Sara does not lock escrow
 CREATE OR REPLACE PROCEDURE auto_expire_requests() AS $$
 BEGIN
   -- Expire pending requests after 15 mins
   UPDATE requests
-  SET rq_status = 'expired'
+  SET rq_status = 'expired',
+      updated_at = extract(epoch from now()) * 1000
   WHERE rq_status = 'pending'
   AND expires_at < (extract(epoch from now()) * 1000);
 
-  -- Expire accepted requests where Sara hasn't locked escrow within 30 mins
+  -- Expire accepted requests where Sara hasn't locked escrow within 15 mins
   UPDATE requests
-  SET rq_status = 'expired'
+  SET rq_status = 'expired',
+      updated_at = extract(epoch from now()) * 1000
   WHERE rq_status = 'accepted'
-  AND (extract(epoch from now()) * 1000) > (updated_at + 1800000);
+  AND (extract(epoch from now()) * 1000) > (updated_at + 900000);
 END;
 $$ LANGUAGE plpgsql;
 
 
 
 -- Auto Release Escrow
+-- Case 1: txn stuck in escrow_locked for 30 mins — Ahmed never submitted tracking — refund Sara
+-- Case 2: txn stuck in tracking_submitted for 15 mins — Sara never confirmed — pay Ahmed
 CREATE OR REPLACE PROCEDURE auto_release_escrow() AS $$
 DECLARE
   v_txn RECORD;
 BEGIN
+  -- Case 1: Refund Sara — Ahmed never submitted tracking within 30 mins
   FOR v_txn IN
     SELECT t.*, r.requester_id, r.card_holder_id
     FROM transactions t
     JOIN requests r ON r.id = t.request_id
     WHERE t.txn_status = 'escrow_locked'
-    AND (extract(epoch from now()) * 1000) > (t.created_at + 3600000)
+    AND (extract(epoch from now()) * 1000) > (t.updated_at + 1800000)
   LOOP
-    -- Release escrow back to requester
     UPDATE users
     SET wallet_balance = wallet_balance + v_txn.total_paid
     WHERE id = v_txn.requester_id;
 
-    -- Mark transaction as refunded
     UPDATE transactions
     SET txn_status = 'refunded',
         updated_at = extract(epoch from now()) * 1000
     WHERE id = v_txn.id;
 
-    -- Mark request as expired
     UPDATE requests
     SET rq_status = 'expired',
         updated_at = extract(epoch from now()) * 1000
     WHERE id = v_txn.request_id;
-
   END LOOP;
+
+  -- Case 2: Pay Ahmed — Sara never confirmed tracking within 15 mins
+  FOR v_txn IN
+    SELECT t.*, r.requester_id, r.card_holder_id
+    FROM transactions t
+    JOIN requests r ON r.id = t.request_id
+    WHERE t.txn_status = 'tracking_submitted'
+    AND (extract(epoch from now()) * 1000) > (t.updated_at + 900000)
+  LOOP
+    UPDATE users
+    SET wallet_balance = wallet_balance + (v_txn.total_paid - v_txn.platform_fee)
+    WHERE id = v_txn.card_holder_id;
+
+    UPDATE transactions
+    SET txn_status = 'completed',
+        updated_at = extract(epoch from now()) * 1000
+    WHERE id = v_txn.id;
+
+    UPDATE requests
+    SET rq_status = 'completed',
+        updated_at = extract(epoch from now()) * 1000
+    WHERE id = v_txn.request_id;
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Verify Security Answer
+-- Called during forgot PIN flow
+-- Returns user if answer is correct so backend can issue JWT for PIN reset
+-- Takes phone since user is not logged in at this point
+CREATE OR REPLACE FUNCTION verify_security_answer(
+  p_phone VARCHAR(20),
+  p_security_answer_hash TEXT
+) RETURNS JSON AS $$
+DECLARE
+  v_user RECORD;
+BEGIN
+  SELECT * INTO v_user FROM users WHERE phone = p_phone;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'User not found.';
+  END IF;
+
+  IF v_user.security_question IS NULL THEN
+    RAISE EXCEPTION 'No security question set.';
+  END IF;
+
+  IF v_user.security_answer_hash != p_security_answer_hash THEN
+    RAISE EXCEPTION 'Incorrect answer.';
+  END IF;
+
+  RETURN (
+    SELECT row_to_json(u)
+    FROM (
+      SELECT id, phone, display_name, security_question
+      FROM users WHERE id = v_user.id
+    ) u
+  );
 END;
 $$ LANGUAGE plpgsql;

@@ -1,3 +1,9 @@
+-- database/requester.sql
+
+/* ── CARD REQUESTER PROCEDURES ──────────────────────────────────── */
+
+
+
 -- Create Request
 -- Sara can only have one active request at a time across entire circle
 -- Checks circle membership and card availability
@@ -192,6 +198,57 @@ BEGIN
              incentive_fee, total_paid, txn_status, updated_at
       FROM transactions WHERE id = v_txn.id
     ) t
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+-- Get Request (Requester View)
+-- Returns full request details for Sara including card holder and card info
+-- Sara always sees her own delivery address
+-- Includes transaction details once escrow is locked
+-- updated_at included so frontend can show countdown timers
+CREATE OR REPLACE FUNCTION get_request_requester(
+  p_request_id VARCHAR(36),
+  p_requester_id VARCHAR(36)
+) RETURNS JSON AS $$
+DECLARE
+  v_request RECORD;
+BEGIN
+  SELECT * INTO v_request FROM requests
+  WHERE id = p_request_id
+  AND requester_id = p_requester_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Request not found or access denied.';
+  END IF;
+
+  RETURN (
+    SELECT row_to_json(r)
+    FROM (
+      SELECT
+        req.id,
+        req.merchant,
+        req.product_url,
+        req.order_amount,
+        req.delivery_address,
+        req.note,
+        req.rq_status,
+        req.expires_at,
+        req.created_at,
+        req.updated_at,
+        u.display_name AS card_holder_name,
+        c.bank_name,
+        c.card_type,
+        c.card_tier,
+        row_to_json(t) AS transaction
+      FROM requests req
+      JOIN users u ON u.id = req.card_holder_id
+      JOIN cards c ON c.id = req.card_id
+      LEFT JOIN transactions t ON t.request_id = req.id
+      WHERE req.id = p_request_id
+    ) r
   );
 END;
 $$ LANGUAGE plpgsql;
