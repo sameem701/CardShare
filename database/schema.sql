@@ -27,6 +27,19 @@ CREATE TABLE IF NOT EXISTS otps (
   attempts     INT NOT NULL DEFAULT 0
 );
 
+/* ── REFRESH TOKENS ─────────────────────────────────────────── */
+-- Opaque refresh tokens (SHA-256 hash stored — plain token never persisted)
+-- One active refresh per user (one-device policy); rotated on each /auth/refresh
+-- Revoked via revoke_refresh_tokens on logout or bind_device (new phone OTP)
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+  id          VARCHAR(36) PRIMARY KEY,
+  user_id     VARCHAR(36) NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  device_id   VARCHAR(200) NOT NULL,
+  token_hash  TEXT NOT NULL UNIQUE,
+  expires_at  BIGINT NOT NULL,
+  created_at  BIGINT NOT NULL
+);
+
 /* ── CARDS ──────────────────────────────────────────────────── */
 CREATE TABLE IF NOT EXISTS cards (
   id            VARCHAR(36) PRIMARY KEY,
@@ -64,16 +77,18 @@ CREATE TABLE IF NOT EXISTS requests (
   order_amount         INT NOT NULL CHECK (order_amount > 0),
   discount_percentage  INT NOT NULL DEFAULT 0,
   note                 TEXT,
+
   -- set at accept_request
   platform_fee         INT,
   incentive_fee        INT,
   total_paid           INT,
+
   -- set at submit_tracking
-  tracking_id          VARCHAR(200),
-  delivery_expected_at BIGINT,
+  screenshot_url          VARCHAR(200),
   actual_amount_paid   INT,
-  rq_status            VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (rq_status IN ('pending', 'escrow_locked', 'tracking_submitted')),
-  expires_at           BIGINT NOT NULL,
+  dispute_deadline     BIGINT,  -- set at submit_tracking: Sara confirm/dispute window ends here (30 min)
+  rq_status            VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (rq_status IN ('pending', 'payment_pending', 'escrow_locked', 'tracking_submitted')),
+  expires_at           BIGINT NOT NULL,  -- repurposed per phase: pending / payment_pending / escrow_locked deadlines
   created_at           BIGINT NOT NULL,
   updated_at           BIGINT NOT NULL
 );
@@ -104,8 +119,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   total_paid           INT NOT NULL,
   actual_amount_paid   INT,
   txn_status           VARCHAR(20) NOT NULL CHECK (txn_status IN ('completed', 'cancelled', 'refunded', 'disputed')),
-  tracking_id          VARCHAR(200),
-  delivery_expected_at BIGINT,
+  screenshot_url          VARCHAR(200),
   dispute_reason       TEXT,
   created_at           BIGINT NOT NULL,
   updated_at           BIGINT NOT NULL
@@ -136,6 +150,8 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 
 /* ── INDEXES for performance ────────────────────────────────── */
 CREATE INDEX IF NOT EXISTS idx_otps_phone          ON otps(phone);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON refresh_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_exp  ON refresh_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_cards_user          ON cards(user_id);
 CREATE INDEX IF NOT EXISTS idx_circle_user         ON circle(user_id);
 CREATE INDEX IF NOT EXISTS idx_circle_friend       ON circle(friend_id);
@@ -149,8 +165,10 @@ CREATE INDEX IF NOT EXISTS idx_chat_request        ON chat_messages(request_id);
 
 /* ─────────────────────────────────────────────────────────────
    AUTH
-   Flow: store_otp → verify_otp (calls login_or_create_user internally)
-         → get_login_status (silent call on app open)
+   Flow: store_otp → verify_otp (login + bind_device, revokes old refresh)
+         → get_login_status → verify_pin
+         → backend issues access JWT (~15 min) + store_refresh_token (~30 days)
+         → validate_refresh_token / rotate_refresh_token on /auth/refresh
    ───────────────────────────────────────────────────────────── */
 
 -- Internal helper — creates user row on first OTP verification
@@ -198,18 +216,204 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- User submits OTP — checks expiry, attempt limit, then hash
--- On success: deletes OTP row, creates user if new, returns user + is_onboarded flag
--- is_onboarded = 0 → route to onboarding
--- is_onboarded = 1 → existing user on new device, route to PIN screen
-CREATE OR REPLACE FUNCTION verify_otp(
-  p_phone    VARCHAR(20),
-  p_otp_hash TEXT
+-- Deletes the refresh token for a user — bind_device (new phone OTP)
+CREATE OR REPLACE PROCEDURE revoke_refresh_tokens(
+  p_user_id VARCHAR(36)
+) AS $$
+BEGIN
+  DELETE FROM refresh_tokens WHERE user_id = p_user_id;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Explicit logout: revoke refresh + unbind device (next /auth/status → new_device)
+CREATE OR REPLACE PROCEDURE logout_user(
+  p_user_id VARCHAR(36)
+) AS $$
+BEGIN
+  CALL revoke_refresh_tokens(p_user_id);
+
+  UPDATE users
+  SET device_id = NULL
+  WHERE id = p_user_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'User not found.';
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Legacy — drop if upgrading: DROP PROCEDURE IF EXISTS revoke_refresh_token(TEXT);
+
+
+-- Called by backend after OTP/PIN login — replaces any existing row for this user
+CREATE OR REPLACE FUNCTION store_refresh_token(
+  p_user_id    VARCHAR(36),
+  p_device_id  VARCHAR(200),
+  p_token_hash TEXT,
+  p_expires_at BIGINT
 ) RETURNS JSON AS $$
 DECLARE
-  v_otp  RECORD;
-  v_user JSON;
+  v_id VARCHAR(36);
 BEGIN
+  IF p_token_hash IS NULL OR p_token_hash = '' THEN
+    RAISE EXCEPTION 'Token hash cannot be empty.';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM users WHERE id = p_user_id AND device_id = p_device_id
+  ) THEN
+    RAISE EXCEPTION 'Device does not match the bound device for this user.';
+  END IF;
+
+  DELETE FROM refresh_tokens WHERE user_id = p_user_id;
+
+  v_id := uuid_generate_v4()::varchar;
+
+  INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at, created_at)
+  VALUES (
+    v_id, p_user_id, p_device_id, p_token_hash, p_expires_at,
+    extract(epoch from now()) * 1000
+  );
+
+  RETURN json_build_object(
+    'id',         v_id,
+    'expires_at', p_expires_at
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Validates refresh token + device; returns user fields for new access JWT
+CREATE OR REPLACE FUNCTION validate_refresh_token(
+  p_token_hash TEXT,
+  p_device_id  VARCHAR(200)
+) RETURNS JSON AS $$
+DECLARE
+  v_row RECORD;
+BEGIN
+  SELECT rt.user_id, rt.device_id, rt.expires_at,
+         u.phone, u.display_name, u.wallet_balance, u.is_onboarded
+  INTO v_row
+  FROM refresh_tokens rt
+  JOIN users u ON u.id = rt.user_id
+  WHERE rt.token_hash = p_token_hash;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Invalid refresh token.';
+  END IF;
+
+  IF (extract(epoch from now()) * 1000) > v_row.expires_at THEN
+    DELETE FROM refresh_tokens WHERE token_hash = p_token_hash;
+    RAISE EXCEPTION 'Refresh token has expired.';
+  END IF;
+
+  IF v_row.device_id != p_device_id THEN
+    RAISE EXCEPTION 'Device does not match refresh token.';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM users WHERE id = v_row.user_id AND device_id = p_device_id
+  ) THEN
+    DELETE FROM refresh_tokens WHERE user_id = v_row.user_id;
+    RAISE EXCEPTION 'Session revoked. Please log in again.';
+  END IF;
+
+  RETURN json_build_object(
+    'user_id',        v_row.user_id,
+    'device_id',      v_row.device_id,
+    'phone',          v_row.phone,
+    'display_name',   v_row.display_name,
+    'wallet_balance', v_row.wallet_balance,
+    'is_onboarded',   v_row.is_onboarded
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Rotation: validate old token, replace with new (store_refresh_token clears prior row for user)
+CREATE OR REPLACE FUNCTION rotate_refresh_token(
+  p_old_token_hash TEXT,
+  p_new_token_hash TEXT,
+  p_device_id      VARCHAR(200),
+  p_expires_at     BIGINT
+) RETURNS JSON AS $$
+DECLARE
+  v_valid JSON;
+  v_store JSON;
+BEGIN
+  v_valid := validate_refresh_token(p_old_token_hash, p_device_id);
+
+  v_store := store_refresh_token(
+    v_valid->>'user_id', p_device_id, p_new_token_hash, p_expires_at
+  );
+
+  RETURN json_build_object(
+    'expires_at',     v_store->'expires_at',
+    'user_id',        v_valid->'user_id',
+    'phone',          v_valid->'phone',
+    'display_name',   v_valid->'display_name',
+    'wallet_balance', v_valid->'wallet_balance',
+    'is_onboarded',   v_valid->'is_onboarded',
+    'device_id',      v_valid->'device_id'
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Binds this physical device to the user — called inside verify_otp
+-- Does not set is_onboarded — that happens at complete_onboarding
+-- Returns previous device_id (NULL for brand new users) for optional FCM kick
+CREATE OR REPLACE FUNCTION bind_device(
+  p_user_id   VARCHAR(36),
+  p_device_id VARCHAR(200)
+) RETURNS VARCHAR AS $$
+DECLARE
+  v_old_device_id VARCHAR(200);
+BEGIN
+  IF p_device_id IS NULL OR p_device_id = '' THEN
+    RAISE EXCEPTION 'Device ID cannot be empty.';
+  END IF;
+
+  SELECT device_id INTO v_old_device_id
+  FROM users WHERE id = p_user_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'User not found.';
+  END IF;
+
+  UPDATE users
+  SET device_id = p_device_id
+  WHERE id = p_user_id;
+
+  -- Old phone refresh tokens must not renew access after a new device OTP login
+  CALL revoke_refresh_tokens(p_user_id);
+
+  RETURN v_old_device_id;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- User submits OTP — checks expiry, attempt limit, then hash
+-- On success: creates user if new, binds device_id, returns user + old_device_id
+-- is_onboarded = 0 → backend issues session tokens; app routes to profile → pin → complete_onboarding
+-- is_onboarded = 1 → backend returns requires_pin (no session); app shows PIN entry → pin/verify
+CREATE OR REPLACE FUNCTION verify_otp(
+  p_phone     VARCHAR(20),
+  p_otp_hash  TEXT,
+  p_device_id VARCHAR(200)
+) RETURNS JSON AS $$
+DECLARE
+  v_otp           RECORD;
+  v_user          JSON;
+  v_user_id       VARCHAR(36);
+  v_old_device_id VARCHAR(200);
+BEGIN
+  IF p_device_id IS NULL OR p_device_id = '' THEN
+    RAISE EXCEPTION 'Device ID cannot be empty.';
+  END IF;
+
   SELECT * INTO v_otp FROM otps WHERE phone = p_phone;
 
   IF NOT FOUND THEN
@@ -233,8 +437,20 @@ BEGIN
   DELETE FROM otps WHERE phone = p_phone;
 
   v_user := login_or_create_user(p_phone);
+  v_user_id := (v_user->>'id');
+  v_old_device_id := bind_device(v_user_id, p_device_id);
 
-  RETURN v_user;
+  RETURN (
+    SELECT json_build_object(
+      'id',             id,
+      'phone',          phone,
+      'display_name',   display_name,
+      'wallet_balance', wallet_balance,
+      'is_onboarded',   is_onboarded,
+      'old_device_id',  v_old_device_id
+    )
+    FROM users WHERE id = v_user_id
+  );
 END;
 $$ LANGUAGE plpgsql;
 
@@ -242,7 +458,7 @@ $$ LANGUAGE plpgsql;
 -- Called silently by the app on startup using phone + UUID from secure storage
 -- Decides which screen to show without the user doing anything
 --   new_user     → phone not in DB → show phone screen → OTP → onboarding
---   new_device   → phone exists, device unknown → show phone screen → OTP → link_device
+--   new_device   → phone exists, device unknown → show phone screen → OTP (binds device)
 --   known_device → phone and device match → go straight to PIN screen
 CREATE OR REPLACE FUNCTION get_login_status(
   p_phone     VARCHAR(20),
@@ -260,10 +476,16 @@ BEGIN
   -- NULL safe: if either side is NULL this condition is false, falls through to new_device
   IF v_user.device_id IS NOT NULL AND v_user.device_id = p_device_id THEN
     RETURN json_build_object(
-      'status',        'known_device',
-      'user_id',       v_user.id,
-      'has_pin',       (v_user.pin_hash IS NOT NULL),
-      'is_onboarded',  v_user.is_onboarded
+      'status',            'known_device',
+      'user_id',           v_user.id,
+      'has_pin',           (v_user.pin_hash IS NOT NULL),
+      'is_onboarded',      v_user.is_onboarded,
+      'has_valid_refresh', EXISTS (
+        SELECT 1 FROM refresh_tokens
+        WHERE user_id = v_user.id
+        AND device_id = p_device_id
+        AND expires_at > (extract(epoch from now()) * 1000)
+      )
     );
   END IF;
 
@@ -277,8 +499,8 @@ $$ LANGUAGE plpgsql;
 
 /* ─────────────────────────────────────────────────────────────
    ONBOARDING
-   Called in order after verify_otp for a brand new user:
-   update_profile → upsert_pin → link_device
+   Device is bound at verify_otp. Brand new users then:
+   update_profile → upsert_pin → complete_onboarding
    ───────────────────────────────────────────────────────────── */
 
 -- Step 1 — user sets their display name
@@ -315,37 +537,32 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Step 3 — final onboarding step
--- Links device UUID, sets is_onboarded = 1
--- Also called when an existing user proves identity on a new device
--- Returns old_device_id so backend can socket-logout the previous device
--- old_device_id is NULL for brand new users — nothing to kick out
-CREATE OR REPLACE FUNCTION link_device(
-  p_user_id   VARCHAR(36),
-  p_device_id VARCHAR(200)
+-- Step 3 — final onboarding step (device already bound at OTP verify)
+CREATE OR REPLACE FUNCTION complete_onboarding(
+  p_user_id VARCHAR(36)
 ) RETURNS JSON AS $$
-DECLARE
-  v_old_device_id VARCHAR(200);
 BEGIN
-  IF p_device_id IS NULL OR p_device_id = '' THEN
-    RAISE EXCEPTION 'Device ID cannot be empty.';
+  IF NOT EXISTS (
+    SELECT 1 FROM users
+    WHERE id = p_user_id
+    AND pin_hash IS NOT NULL
+    AND display_name IS NOT NULL
+    AND TRIM(display_name) != ''
+  ) THEN
+    RAISE EXCEPTION 'Profile and PIN must be set before completing onboarding.';
   END IF;
 
-  SELECT device_id INTO v_old_device_id
-  FROM users WHERE id = p_user_id;
+  UPDATE users
+  SET is_onboarded = 1
+  WHERE id = p_user_id;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'User not found.';
   END IF;
 
-  UPDATE users
-  SET device_id    = p_device_id,
-      is_onboarded = 1
-  WHERE id = p_user_id;
-
   RETURN json_build_object(
-    'user_id',       p_user_id,
-    'old_device_id', v_old_device_id
+    'user_id',      p_user_id,
+    'is_onboarded', 1
   );
 END;
 $$ LANGUAGE plpgsql;
@@ -403,7 +620,7 @@ $$ LANGUAGE plpgsql;
 
 Flow (post-MVP):
    get_security_question → verify_security_answer
-   → (upsert_pin if forgot PIN) → (link_device if new device)
+   → (upsert_pin if forgot PIN) → (OTP on new device binds via verify_otp)
    → verify_pin
    ───────────────────────────────────────────────────────────── */
 
@@ -623,7 +840,7 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM requests
     WHERE card_id = p_card_id
-    AND rq_status IN ('pending', 'escrow_locked', 'tracking_submitted')
+    AND rq_status IN ('pending', 'payment_pending', 'escrow_locked', 'tracking_submitted')
   ) THEN
     RAISE EXCEPTION 'Cannot delete card. There is an active request using this card.';
   END IF;
@@ -704,7 +921,7 @@ CREATE OR REPLACE PROCEDURE remove_from_circle(
 BEGIN
   IF EXISTS (
     SELECT 1 FROM requests
-    WHERE rq_status IN ('pending', 'escrow_locked', 'tracking_submitted')
+    WHERE rq_status IN ('pending', 'payment_pending', 'escrow_locked', 'tracking_submitted')
     AND (
       (requester_id = p_user_id AND card_holder_id = p_friend_id)
       OR (requester_id = p_friend_id AND card_holder_id = p_user_id)
@@ -788,7 +1005,7 @@ BEGIN
     SELECT 1 FROM requests
     WHERE id = p_request_id
     AND (requester_id = p_sender_id OR card_holder_id = p_sender_id)
-    AND rq_status IN ('pending', 'escrow_locked', 'tracking_submitted')
+    AND rq_status IN ('pending', 'payment_pending', 'escrow_locked', 'tracking_submitted')
   ) THEN
     RAISE EXCEPTION 'Request not found or chat not available.';
   END IF;
@@ -834,32 +1051,53 @@ $$ LANGUAGE plpgsql;
    Called by the backend on a regular interval (e.g. every minute)
    ───────────────────────────────────────────────────────────── */
 
--- Deletes pending requests where Ahmed never responded within 15 mins
--- No money was ever involved so no transaction row is created
-CREATE OR REPLACE PROCEDURE auto_expire_requests() AS $$
+-- Housekeeping — expired refresh token rows (optional cron alongside auto_expire_requests)
+CREATE OR REPLACE PROCEDURE purge_expired_refresh_tokens() AS $$
 BEGIN
-  DELETE FROM requests
-  WHERE rq_status = 'pending'
-  AND expires_at < (extract(epoch from now()) * 1000);
+  DELETE FROM refresh_tokens
+  WHERE expires_at < (extract(epoch from now()) * 1000);
 END;
 $$ LANGUAGE plpgsql;
 
 
--- Case 1: escrow_locked for 30 mins — Ahmed never submitted tracking — refund Sara in full
--- Case 2: tracking_submitted for 15 mins — Sara raised no dispute — pay Ahmed
+-- Deletes timed-out requests — no money involved, no transaction row created
+-- FOR UPDATE per row — pending competes with accept/decline/cancel; payment_pending with confirm/cancel
+CREATE OR REPLACE PROCEDURE auto_expire_requests() AS $$
+DECLARE
+  v_req RECORD;
+BEGIN
+  FOR v_req IN
+    SELECT id FROM requests
+    WHERE rq_status IN ('pending', 'payment_pending')
+    AND expires_at < (extract(epoch from now()) * 1000)
+    FOR UPDATE
+  LOOP
+    DELETE FROM requests WHERE id = v_req.id;
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Case 1: escrow_locked for 30 mins — Ahmed never submitted tracking — refund Sara full order_amount
+-- Case 2: tracking_submitted past dispute_deadline — Sara did not confirm or dispute:
+--           Ahmed receives  actual_amount_paid + incentive_fee (25% of expected_saving)
+--           Platform takes  platform_fee (5% of expected_saving)
+--           Sara gets back  order_amount − actual_amount_paid − incentive_fee − platform_fee (70% of saving)
 -- Both cases: INSERT sealed transaction record, DELETE request row
 CREATE OR REPLACE PROCEDURE auto_release_escrow() AS $$
 DECLARE
   v_req RECORD;
 BEGIN
   -- Case 1: Refund Sara — Ahmed never submitted tracking within 30 mins
+  -- FOR UPDATE OF r — only one of submit_tracking / cancel_request_holder / this loop can settle each row
   FOR v_req IN
     SELECT r.*, c.bank_name, c.card_type, c.card_tier
     FROM requests r
     JOIN cards c ON c.id = r.card_id
     WHERE r.rq_status = 'escrow_locked'
     AND r.total_paid IS NOT NULL
-    AND (extract(epoch from now()) * 1000) > (r.updated_at + 1800000)
+    AND (extract(epoch from now()) * 1000) > r.expires_at
+    FOR UPDATE OF r
   LOOP
     UPDATE users
     SET wallet_balance = wallet_balance + v_req.total_paid
@@ -870,7 +1108,7 @@ BEGIN
       delivery_address, order_amount, discount_percentage, note,
       bank_name, card_type, card_tier,
       platform_fee, incentive_fee, total_paid, actual_amount_paid,
-      txn_status, tracking_id, delivery_expected_at, dispute_reason,
+      txn_status, screenshot_url, dispute_reason,
       created_at, updated_at
     ) VALUES (
       uuid_generate_v4()::varchar, v_req.requester_id, v_req.card_holder_id,
@@ -878,21 +1116,24 @@ BEGIN
       v_req.order_amount, v_req.discount_percentage, v_req.note,
       v_req.bank_name, v_req.card_type, v_req.card_tier,
       v_req.platform_fee, v_req.incentive_fee, v_req.total_paid, NULL,
-      'refunded', NULL, NULL, NULL,
+      'refunded', NULL, NULL,
       extract(epoch from now()) * 1000, extract(epoch from now()) * 1000
     );
 
     DELETE FROM requests WHERE id = v_req.id;
   END LOOP;
 
-  -- Case 2: Pay Ahmed — tracking submitted, Sara raised no dispute within 15 mins
+  -- Case 2: Pay Ahmed — dispute_deadline passed, Sara did not confirm or dispute
+  -- FOR UPDATE OF r — only one of confirm_tracking / raise_dispute / this loop can settle each row
   FOR v_req IN
     SELECT r.*, c.bank_name, c.card_type, c.card_tier
     FROM requests r
     JOIN cards c ON c.id = r.card_id
     WHERE r.rq_status = 'tracking_submitted'
     AND r.actual_amount_paid IS NOT NULL
-    AND (extract(epoch from now()) * 1000) > (r.updated_at + 900000)
+    AND r.dispute_deadline IS NOT NULL
+    AND (extract(epoch from now()) * 1000) > r.dispute_deadline
+    FOR UPDATE OF r
   LOOP
     UPDATE users
     SET wallet_balance = wallet_balance + (v_req.actual_amount_paid + v_req.incentive_fee)
@@ -911,7 +1152,7 @@ BEGIN
       delivery_address, order_amount, discount_percentage, note,
       bank_name, card_type, card_tier,
       platform_fee, incentive_fee, total_paid, actual_amount_paid,
-      txn_status, tracking_id, delivery_expected_at, dispute_reason,
+      txn_status, screenshot_url, dispute_reason,
       created_at, updated_at
     ) VALUES (
       uuid_generate_v4()::varchar, v_req.requester_id, v_req.card_holder_id,
@@ -919,7 +1160,7 @@ BEGIN
       v_req.order_amount, v_req.discount_percentage, v_req.note,
       v_req.bank_name, v_req.card_type, v_req.card_tier,
       v_req.platform_fee, v_req.incentive_fee, v_req.total_paid, v_req.actual_amount_paid,
-      'completed', v_req.tracking_id, v_req.delivery_expected_at, NULL,
+      'completed', v_req.screenshot_url, NULL,
       extract(epoch from now()) * 1000, extract(epoch from now()) * 1000
     );
 

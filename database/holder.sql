@@ -3,7 +3,7 @@
 /* ─────────────────────────────────────────────────────────────
    CARD HOLDER (Ahmed)
    Flow: get_incoming_requests → accept_request / decline_request
-         → get_active_orders_holder → submit_tracking
+         → [payment_pending — awaiting Sara's payment] → get_active_orders_holder → submit_tracking
          → get_request_holder (view detail at any point)
          → get_transaction_history_holder (view past completed orders)
    ───────────────────────────────────────────────────────────── */
@@ -46,9 +46,7 @@ $$ LANGUAGE plpgsql;
 
 
 -- Ahmed accepts Sara's request
--- Fees are calculated and stored on the request row — no transaction created yet
--- Sara's wallet is deducted immediately (escrow locked on the request)
--- Ahmed has 30 mins to submit tracking or auto_release_escrow refunds Sara
+-- Row locked with FOR UPDATE — competes with decline_request, cancel_request, and auto_expire_requests
 CREATE OR REPLACE FUNCTION accept_request(
   p_request_id VARCHAR(36),
   p_holder_id  VARCHAR(36)
@@ -57,18 +55,15 @@ DECLARE
   v_request       RECORD;
   v_platform_fee  INT;
   v_incentive_fee INT;
-  v_total_paid    INT;
 BEGIN
   SELECT * INTO v_request FROM requests
   WHERE id = p_request_id
-  AND card_holder_id = p_holder_id;
+  AND card_holder_id = p_holder_id
+  AND rq_status = 'pending'
+  FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Request not found or access denied.';
-  END IF;
-
-  IF v_request.rq_status != 'pending' THEN
-    RAISE EXCEPTION 'Request is not in pending state.';
+    RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
   END IF;
 
   IF (extract(epoch from now()) * 1000) > v_request.expires_at THEN
@@ -76,27 +71,17 @@ BEGIN
     RAISE EXCEPTION 'Request has expired.';
   END IF;
 
-  -- platform_fee = 1%, incentive_fee = 2.5% of order_amount
-  v_platform_fee  := ROUND(v_request.order_amount * 0.01);
-  v_incentive_fee := ROUND(v_request.order_amount * 0.025);
-  v_total_paid    := v_request.order_amount + v_platform_fee + v_incentive_fee;
+  v_platform_fee  := ROUND(v_request.order_amount * (v_request.discount_percentage / 100.0) * 0.05);
+  v_incentive_fee := ROUND(v_request.order_amount * (v_request.discount_percentage / 100.0) * 0.25);
 
-  -- Double-check Sara's balance in case it changed since create_request
-  IF (SELECT wallet_balance FROM users WHERE id = v_request.requester_id) < v_total_paid THEN
-    DELETE FROM requests WHERE id = p_request_id;
-    RAISE EXCEPTION 'Requester has insufficient balance. Request has been deleted.';
-  END IF;
-
-  UPDATE users
-  SET wallet_balance = wallet_balance - v_total_paid
-  WHERE id = v_request.requester_id;
-
-  -- Store fee snapshot on the request row — used at settlement time
+  -- Store fee snapshot, move to payment_pending
+  -- expires_at repurposed as Sara's 3 min payment window from this moment
   UPDATE requests
-  SET rq_status     = 'escrow_locked',
+  SET rq_status     = 'payment_pending',
       platform_fee  = v_platform_fee,
       incentive_fee = v_incentive_fee,
-      total_paid    = v_total_paid,
+      total_paid    = v_request.order_amount,
+      expires_at    = (extract(epoch from now()) * 1000) + 600000,
       updated_at    = extract(epoch from now()) * 1000
   WHERE id = p_request_id;
 
@@ -104,8 +89,8 @@ BEGIN
     SELECT row_to_json(r)
     FROM (
       SELECT id, merchant, order_amount, discount_percentage,
-             delivery_address, platform_fee, incentive_fee, total_paid,
-             rq_status, updated_at
+             platform_fee, incentive_fee, total_paid,
+             rq_status, expires_at, updated_at
       FROM requests WHERE id = p_request_id
     ) r
   );
@@ -114,7 +99,7 @@ $$ LANGUAGE plpgsql;
 
 
 -- Ahmed declines Sara's request
--- Only works from pending state — Sara is freed to make a new request immediately
+-- Row locked with FOR UPDATE — competes with accept_request, cancel_request, and auto_expire_requests
 CREATE OR REPLACE FUNCTION decline_request(
   p_request_id VARCHAR(36),
   p_holder_id  VARCHAR(36)
@@ -124,14 +109,12 @@ DECLARE
 BEGIN
   SELECT * INTO v_request FROM requests
   WHERE id = p_request_id
-  AND card_holder_id = p_holder_id;
+  AND card_holder_id = p_holder_id
+  AND rq_status = 'pending'
+  FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Request not found or access denied.';
-  END IF;
-
-  IF v_request.rq_status != 'pending' THEN
-    RAISE EXCEPTION 'Request is not in pending state.';
+    RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
   END IF;
 
   DELETE FROM requests WHERE id = p_request_id;
@@ -148,8 +131,7 @@ $$ LANGUAGE plpgsql;
 
 -- Ahmed cancels an order he already accepted
 -- Only allowed from escrow_locked — once tracking is submitted Ahmed has committed
--- Sara is refunded her full total_paid immediately
--- Sealed transaction record created with status 'cancelled', request row deleted
+-- Row locked with FOR UPDATE — competes with submit_tracking and cron Case 1
 CREATE OR REPLACE FUNCTION cancel_request_holder(
   p_request_id VARCHAR(36),
   p_holder_id  VARCHAR(36)
@@ -161,14 +143,12 @@ DECLARE
 BEGIN
   SELECT * INTO v_request FROM requests
   WHERE id = p_request_id
-  AND card_holder_id = p_holder_id;
+  AND card_holder_id = p_holder_id
+  AND rq_status = 'escrow_locked'
+  FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Request not found or access denied.';
-  END IF;
-
-  IF v_request.rq_status != 'escrow_locked' THEN
-    RAISE EXCEPTION 'Request can only be cancelled while escrow is locked. Once tracking is submitted it cannot be cancelled.';
+    RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
   END IF;
 
   SELECT * INTO v_card FROM cards WHERE id = v_request.card_id;
@@ -185,7 +165,7 @@ BEGIN
     delivery_address, order_amount, discount_percentage, note,
     bank_name, card_type, card_tier,
     platform_fee, incentive_fee, total_paid, actual_amount_paid,
-    txn_status, tracking_id, delivery_expected_at, dispute_reason,
+    txn_status, screenshot_url, dispute_reason,
     created_at, updated_at
   ) VALUES (
     v_txn_id, v_request.requester_id, v_request.card_holder_id,
@@ -193,7 +173,7 @@ BEGIN
     v_request.order_amount, v_request.discount_percentage, v_request.note,
     v_card.bank_name, v_card.card_type, v_card.card_tier,
     v_request.platform_fee, v_request.incentive_fee, v_request.total_paid, NULL,
-    'cancelled', NULL, NULL, NULL,
+    'cancelled', NULL, NULL,
     extract(epoch from now()) * 1000, extract(epoch from now()) * 1000
   );
 
@@ -209,8 +189,9 @@ $$ LANGUAGE plpgsql;
 
 
 -- Ahmed sees orders he has already accepted
--- escrow_locked   = he still needs to place the order and submit tracking
--- tracking_submitted = tracking submitted, waiting for Sara's 15 min dispute window
+-- payment_pending    = awaiting Sara's payment confirmation (3 min window)
+-- escrow_locked      = Ahmed must submit screenshot before expires_at (30 min, set at confirm_payment)
+-- tracking_submitted = tracking submitted, waiting for Sara's 30 min dispute window
 -- Financial data read directly from requests row (no transaction exists yet)
 CREATE OR REPLACE FUNCTION get_active_orders_holder(
   p_holder_id VARCHAR(36)
@@ -232,8 +213,8 @@ BEGIN
         req.incentive_fee,
         req.total_paid,
         req.actual_amount_paid,
-        req.tracking_id,
-        req.delivery_expected_at,
+        req.screenshot_url,
+        req.dispute_deadline,
         req.created_at,
         req.updated_at,
         u.display_name AS requester_name,
@@ -244,7 +225,7 @@ BEGIN
       JOIN users u ON u.id = req.requester_id
       JOIN cards c ON c.id = req.card_id
       WHERE req.card_holder_id = p_holder_id
-      AND req.rq_status IN ('escrow_locked', 'tracking_submitted')
+      AND req.rq_status IN ('payment_pending', 'escrow_locked', 'tracking_submitted')
       ORDER BY req.created_at DESC
     ) r
   );
@@ -252,15 +233,12 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Ahmed submits the tracking ID after placing the order
--- actual_amount_paid = what Ahmed actually paid at checkout
--- Backend defaults this to ROUND(order_amount * (1 - discount_percentage / 100.0)) for MVP
--- Starts Sara's 15 min dispute window
+-- Ahmed submits screenshot after placing the order
+-- Row locked with FOR UPDATE — competes with cancel_request_holder and cron Case 1
 CREATE OR REPLACE FUNCTION submit_tracking(
   p_request_id           VARCHAR(36),
   p_holder_id            VARCHAR(36),
-  p_tracking_id          VARCHAR(200),
-  p_delivery_expected_at BIGINT,
+  p_screenshot_url          VARCHAR(200),
   p_actual_amount_paid   INT
 ) RETURNS JSON AS $$
 DECLARE
@@ -268,38 +246,41 @@ DECLARE
 BEGIN
   SELECT * INTO v_request FROM requests
   WHERE id = p_request_id
-  AND card_holder_id = p_holder_id;
+  AND card_holder_id = p_holder_id
+  AND rq_status = 'escrow_locked'
+  FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Request not found or access denied.';
+    RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
   END IF;
 
-  IF v_request.rq_status != 'escrow_locked' THEN
-    RAISE EXCEPTION 'Escrow is not locked. Cannot submit tracking.';
+  IF (extract(epoch from now()) * 1000) > v_request.expires_at THEN
+    RAISE EXCEPTION 'Screenshot submission window has expired.';
   END IF;
 
   IF p_actual_amount_paid <= 0 THEN
     RAISE EXCEPTION 'Actual amount paid must be greater than zero.';
   END IF;
 
-  -- actual_amount_paid + fees must not exceed total_paid (what Sara locked)
-  IF (p_actual_amount_paid + v_request.incentive_fee + v_request.platform_fee) > v_request.total_paid THEN
+  -- actual_amount_paid + fees must not exceed order_amount (what Sara locked)
+  -- ensures Sara always saves money and the escrow covers everything
+  IF (p_actual_amount_paid + v_request.incentive_fee + v_request.platform_fee) > v_request.order_amount THEN
     RAISE EXCEPTION 'Actual amount paid exceeds the escrowed amount. Please cancel the request instead.';
   END IF;
 
   UPDATE requests
-  SET tracking_id          = p_tracking_id,
-      delivery_expected_at = p_delivery_expected_at,
+  SET screenshot_url       = p_screenshot_url,
       actual_amount_paid   = p_actual_amount_paid,
       rq_status            = 'tracking_submitted',
+      dispute_deadline     = (extract(epoch from now()) * 1000) + 1800000,
       updated_at           = extract(epoch from now()) * 1000
   WHERE id = p_request_id;
 
   RETURN (
     SELECT row_to_json(r)
     FROM (
-      SELECT id, tracking_id, delivery_expected_at,
-             actual_amount_paid, rq_status, updated_at
+      SELECT id, screenshot_url,
+             actual_amount_paid, rq_status, dispute_deadline, updated_at
       FROM requests WHERE id = p_request_id
     ) r
   );
@@ -340,8 +321,8 @@ BEGIN
         req.incentive_fee,
         req.total_paid,
         req.actual_amount_paid,
-        req.tracking_id,
-        req.delivery_expected_at,
+        req.screenshot_url,
+        req.dispute_deadline,
         req.expires_at,
         req.created_at,
         req.updated_at,
@@ -350,7 +331,7 @@ BEGIN
         c.card_type,
         c.card_tier,
         CASE
-          WHEN req.rq_status IN ('escrow_locked', 'tracking_submitted')
+          WHEN req.rq_status IN ('payment_pending', 'escrow_locked', 'tracking_submitted')
           THEN req.delivery_address
           ELSE NULL
         END AS delivery_address
@@ -387,8 +368,7 @@ BEGIN
         txn.total_paid,
         txn.actual_amount_paid,
         txn.txn_status,
-        txn.tracking_id,
-        txn.delivery_expected_at,
+        txn.screenshot_url,
         txn.dispute_reason,
         txn.created_at,
         txn.updated_at,

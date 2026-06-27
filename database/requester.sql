@@ -2,9 +2,10 @@
 
 /* ─────────────────────────────────────────────────────────────
    CARD REQUESTER (Sara)
-   Flow: create_request → cancel_request (if still pending)
+   Flow: create_request → cancel_request (pending or payment_pending, before Sara pays)
+         → [Ahmed accepts → payment_pending] → confirm_payment (Sara pays, escrow locks)
          → get_outgoing_requests / get_request_requester (view progress)
-         → confirm_tracking (approve immediately) / raise_dispute (reject)
+         → confirm_tracking (approve immediately) / raise_dispute (reject within 30 min)
          → get_transaction_history_requester (view past completed orders)
    ───────────────────────────────────────────────────────────── */
 
@@ -49,7 +50,7 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM requests
     WHERE requester_id = p_requester_id
-    AND rq_status IN ('pending', 'escrow_locked', 'tracking_submitted') -- all possible active states
+    AND rq_status IN ('pending', 'payment_pending', 'escrow_locked', 'tracking_submitted')
   ) THEN
     RAISE EXCEPTION 'You already have an active request. Complete or cancel it before making a new one.';
   END IF;
@@ -86,8 +87,10 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Sara cancels her own request
--- Only allowed while still pending — once Ahmed accepts escrow locks and cancellation is blocked
+-- Sara cancels her own request before escrow locks
+-- Allowed in pending or payment_pending — row locked with FOR UPDATE
+-- pending: competes with accept_request, decline_request, and auto_expire_requests
+-- payment_pending: competes with confirm_payment and auto_expire_requests
 CREATE OR REPLACE FUNCTION cancel_request(
   p_request_id   VARCHAR(36),
   p_requester_id VARCHAR(36)
@@ -97,31 +100,81 @@ DECLARE
 BEGIN
   SELECT * INTO v_request FROM requests
   WHERE id = p_request_id
-  AND requester_id = p_requester_id;
+  AND requester_id = p_requester_id
+  AND rq_status IN ('pending', 'payment_pending')
+  FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Request not found or access denied.';
-  END IF;
-
-  IF v_request.rq_status != 'pending' THEN
-    RAISE EXCEPTION 'Request can only be cancelled while pending. Once accepted escrow is locked automatically.';
+    RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
   END IF;
 
   DELETE FROM requests WHERE id = p_request_id;
 
   RETURN json_build_object(
-    'request_id',   p_request_id,
-    'merchant',     v_request.merchant,
-    'order_amount', v_request.order_amount,
-    'result',       'cancelled'
+    'request_id',      p_request_id,
+    'merchant',        v_request.merchant,
+    'order_amount',    v_request.order_amount,
+    'card_holder_id',  v_request.card_holder_id,
+    'previous_status', v_request.rq_status,
+    'result',          'cancelled'
   );
 END;
 $$ LANGUAGE plpgsql;
 
 
+-- Sara confirms payment after Ahmed accepts (pay-on-accept model)
+-- Row locked with FOR UPDATE — competes with cancel_request and auto_expire_requests
+-- Lock first, then validate expiry, then deduct wallet, then move to escrow_locked
+CREATE OR REPLACE FUNCTION confirm_payment(
+  p_request_id   VARCHAR(36),
+  p_requester_id VARCHAR(36)
+) RETURNS JSON AS $$
+DECLARE
+  v_request RECORD;
+BEGIN
+  SELECT * INTO v_request FROM requests
+  WHERE id = p_request_id
+  AND requester_id = p_requester_id
+  AND rq_status = 'payment_pending'
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
+  END IF;
+
+  IF (extract(epoch from now()) * 1000) > v_request.expires_at THEN
+    DELETE FROM requests WHERE id = p_request_id;
+    RAISE EXCEPTION 'Payment window has expired. Ahmed''s acceptance has been voided.';
+  END IF;
+
+  IF (SELECT wallet_balance FROM users WHERE id = p_requester_id) < v_request.order_amount THEN
+    RAISE EXCEPTION 'Insufficient wallet balance.';
+  END IF;
+
+  UPDATE users
+  SET wallet_balance = wallet_balance - v_request.order_amount
+  WHERE id = p_requester_id;
+
+  UPDATE requests
+  SET rq_status  = 'escrow_locked',
+      expires_at = (extract(epoch from now()) * 1000) + 1800000,
+      updated_at = extract(epoch from now()) * 1000
+  WHERE id = p_request_id;
+
+  RETURN (
+    SELECT row_to_json(r)
+    FROM (
+      SELECT id, merchant, order_amount, platform_fee, incentive_fee,
+             total_paid, rq_status, expires_at, updated_at
+      FROM requests WHERE id = p_request_id
+    ) r
+  );
+END;
+$$ LANGUAGE plpgsql;
+
 
 -- Sara views full detail of a single active request
--- updated_at lets the frontend show countdown timers
+-- dispute_deadline lets the frontend show Sara's confirm/dispute countdown
 CREATE OR REPLACE FUNCTION get_request_requester(
   p_request_id   VARCHAR(36),
   p_requester_id VARCHAR(36)
@@ -153,8 +206,8 @@ BEGIN
         req.incentive_fee,
         req.total_paid,
         req.actual_amount_paid,
-        req.tracking_id,
-        req.delivery_expected_at,
+        req.screenshot_url,
+        req.dispute_deadline,
         req.expires_at,
         req.created_at,
         req.updated_at,
@@ -172,10 +225,9 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Sara actively approves after seeing the tracking ID
+-- Sara actively approves after seeing the screenshot
 -- Pays Ahmed immediately — faster than waiting for auto_release_escrow
--- If Sara does nothing, auto_release_escrow pays Ahmed after 15 mins anyway
--- Creates sealed transaction record, deletes request row
+-- Row locked with FOR UPDATE; dispute_deadline is the single source of truth for the window
 CREATE OR REPLACE FUNCTION confirm_tracking(
   p_request_id   VARCHAR(36),
   p_requester_id VARCHAR(36)
@@ -187,14 +239,17 @@ DECLARE
 BEGIN
   SELECT * INTO v_request FROM requests
   WHERE id = p_request_id
-  AND requester_id = p_requester_id;
+  AND requester_id = p_requester_id
+  AND rq_status = 'tracking_submitted'
+  FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Request not found or access denied.';
+    RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
   END IF;
 
-  IF v_request.rq_status != 'tracking_submitted' THEN
-    RAISE EXCEPTION 'Tracking has not been submitted yet.';
+  IF v_request.dispute_deadline IS NULL
+     OR (extract(epoch from now()) * 1000) > v_request.dispute_deadline THEN
+    RAISE EXCEPTION 'Review window has closed. Ahmed will be paid automatically shortly.';
   END IF;
 
   SELECT * INTO v_card FROM cards WHERE id = v_request.card_id;
@@ -209,7 +264,8 @@ BEGIN
   SET wallet_balance = wallet_balance + v_request.platform_fee
   WHERE id = 1;
 
-  -- Refund Sara the leftover
+  -- Refund Sara her 70% of saving: order_amount − actual_amount_paid − incentive_fee − platform_fee
+  -- e.g. order 10000, 20% discount → saving 2000 → Ahmed 500, platform 100, Sara gets back 1400
   UPDATE users
   SET wallet_balance = wallet_balance + (v_request.total_paid - v_request.actual_amount_paid - v_request.incentive_fee - v_request.platform_fee)
   WHERE id = v_request.requester_id;
@@ -221,7 +277,7 @@ BEGIN
     delivery_address, order_amount, discount_percentage, note,
     bank_name, card_type, card_tier,
     platform_fee, incentive_fee, total_paid, actual_amount_paid,
-    txn_status, tracking_id, delivery_expected_at, dispute_reason,
+    txn_status, screenshot_url, dispute_reason,
     created_at, updated_at
   ) VALUES (
     v_txn_id, v_request.requester_id, v_request.card_holder_id,
@@ -229,7 +285,7 @@ BEGIN
     v_request.order_amount, v_request.discount_percentage, v_request.note,
     v_card.bank_name, v_card.card_type, v_card.card_tier,
     v_request.platform_fee, v_request.incentive_fee, v_request.total_paid, v_request.actual_amount_paid,
-    'completed', v_request.tracking_id, v_request.delivery_expected_at, NULL,
+    'completed', v_request.screenshot_url, NULL,
     extract(epoch from now()) * 1000, extract(epoch from now()) * 1000
   );
 
@@ -243,9 +299,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Sara rejects within the 15 min dispute window after tracking is submitted
--- Sara is refunded immediately — Ahmed is urged to cancel his placed order
--- Sealed transaction record created with dispute_reason, request row deleted
+-- Sara rejects within dispute_deadline after screenshot is submitted
+-- Row locked with FOR UPDATE — competes with confirm_tracking and cron Case 2
 CREATE OR REPLACE FUNCTION raise_dispute(
   p_request_id   VARCHAR(36),
   p_requester_id VARCHAR(36),
@@ -256,25 +311,23 @@ DECLARE
   v_card    RECORD;
   v_txn_id  VARCHAR(36);
 BEGIN
-  SELECT * INTO v_request FROM requests
-  WHERE id = p_request_id
-  AND requester_id = p_requester_id;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Request not found or access denied.';
-  END IF;
-
-  IF v_request.rq_status != 'tracking_submitted' THEN
-    RAISE EXCEPTION 'Disputes can only be raised after tracking is submitted.';
-  END IF;
-
-  -- Enforce 15 min window from when tracking was submitted (updated_at on request)
-  IF (extract(epoch from now()) * 1000) > (v_request.updated_at + 900000) THEN
-    RAISE EXCEPTION 'Dispute window has closed. Payment has been released automatically.';
-  END IF;
-
   IF p_reason IS NULL OR TRIM(p_reason) = '' THEN
     RAISE EXCEPTION 'A reason is required to raise a dispute.';
+  END IF;
+
+  SELECT * INTO v_request FROM requests
+  WHERE id = p_request_id
+  AND requester_id = p_requester_id
+  AND rq_status = 'tracking_submitted'
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
+  END IF;
+
+  IF v_request.dispute_deadline IS NULL
+     OR (extract(epoch from now()) * 1000) > v_request.dispute_deadline THEN
+    RAISE EXCEPTION 'Dispute window has closed. Payment will be released automatically shortly.';
   END IF;
 
   SELECT * INTO v_card FROM cards WHERE id = v_request.card_id;
@@ -291,7 +344,7 @@ BEGIN
     delivery_address, order_amount, discount_percentage, note,
     bank_name, card_type, card_tier,
     platform_fee, incentive_fee, total_paid, actual_amount_paid,
-    txn_status, tracking_id, delivery_expected_at, dispute_reason,
+    txn_status, screenshot_url, dispute_reason,
     created_at, updated_at
   ) VALUES (
     v_txn_id, v_request.requester_id, v_request.card_holder_id,
@@ -299,7 +352,7 @@ BEGIN
     v_request.order_amount, v_request.discount_percentage, v_request.note,
     v_card.bank_name, v_card.card_type, v_card.card_tier,
     v_request.platform_fee, v_request.incentive_fee, v_request.total_paid, v_request.actual_amount_paid,
-    'disputed', v_request.tracking_id, v_request.delivery_expected_at, p_reason,
+    'disputed', v_request.screenshot_url, p_reason,
     extract(epoch from now()) * 1000, extract(epoch from now()) * 1000
   );
 
@@ -338,8 +391,7 @@ BEGIN
         txn.total_paid,
         txn.actual_amount_paid,
         txn.txn_status,
-        txn.tracking_id,
-        txn.delivery_expected_at,
+        txn.screenshot_url,
         txn.dispute_reason,
         txn.created_at,
         txn.updated_at,
