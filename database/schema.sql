@@ -1,4 +1,7 @@
 -- database/schema.sql
+--
+-- Money convention: all amounts are whole PKR (Pakistani Rupees), stored as INT.
+-- e.g. wallet_balance = 5000 means Rs 5,000. No paisa / fractional rupees in MVP.
 
 /* ── EXTENSIONS ────────────────────────────────────────────── */
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -11,8 +14,8 @@ CREATE TABLE IF NOT EXISTS users (
   display_name         VARCHAR(100),
   pin_hash             TEXT,
   wallet_balance       INT NOT NULL DEFAULT 0,
-  -- security_question    TEXT,         -- NOT IN MVP
-  -- security_answer_hash TEXT,         -- NOT IN MVP
+  security_question    TEXT,
+  security_answer_hash TEXT,
   device_id            VARCHAR(200),
   is_onboarded         INT NOT NULL DEFAULT 0,
   created_at           BIGINT NOT NULL
@@ -24,8 +27,53 @@ CREATE TABLE IF NOT EXISTS otps (
   otp_hash     TEXT NOT NULL,
   expires_at   BIGINT NOT NULL,
   last_sent_at BIGINT NOT NULL,
-  attempts     INT NOT NULL DEFAULT 0
+  attempts     INT NOT NULL DEFAULT 0,
+  resend_count INT NOT NULL DEFAULT 0
 );
+
+ALTER TABLE otps ADD COLUMN IF NOT EXISTS resend_count INT NOT NULL DEFAULT 0;
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS security_question TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS security_answer_hash TEXT;
+
+/* ── OTP PHONE LOCKOUT ──────────────────────────────────────── */
+-- Phone-wide OTP ban after 6 failed verifies in a round.
+-- fail_round escalation: 1 day → 2 → 4 → 10 → permanently blocked (contact support).
+CREATE TABLE IF NOT EXISTS otp_phone_lockout (
+  phone               VARCHAR(20) PRIMARY KEY,
+  verify_fail_count   INT NOT NULL DEFAULT 0,
+  fail_round          INT NOT NULL DEFAULT 0,
+  blocked_until       BIGINT,
+  permanently_blocked INT NOT NULL DEFAULT 0
+);
+
+/* ── PIN PHONE LOCKOUT ──────────────────────────────────────── */
+-- Phone-wide PIN ban after 4 failed verifies in a round (separate from OTP lockout).
+-- fail_round escalation: 1 day → 2 → 4 → 10 → permanently blocked (contact support).
+CREATE TABLE IF NOT EXISTS pin_phone_lockout (
+  phone               VARCHAR(20) PRIMARY KEY,
+  pin_fail_count      INT NOT NULL DEFAULT 0,
+  fail_round          INT NOT NULL DEFAULT 0,
+  blocked_until       BIGINT,
+  permanently_blocked INT NOT NULL DEFAULT 0
+);
+
+/* ── PIN RESET GRANTS ───────────────────────────────────────── */
+-- After correct security answer: phone may reset PIN once before expires_at (15 min).
+CREATE TABLE IF NOT EXISTS pin_reset_grants (
+  phone      VARCHAR(20) PRIMARY KEY,
+  expires_at BIGINT NOT NULL,
+  created_at BIGINT NOT NULL
+);
+
+/* ── SECURITY ANSWER LOCKOUT ────────────────────────────────── */
+-- 3 wrong security answers → permanently blocked (contact support). No ban ladder.
+CREATE TABLE IF NOT EXISTS security_answer_lockout (
+  phone               VARCHAR(20) PRIMARY KEY,
+  fail_count          INT NOT NULL DEFAULT 0,
+  permanently_blocked INT NOT NULL DEFAULT 0
+);
+
 
 /* ── REFRESH TOKENS ─────────────────────────────────────────── */
 -- Opaque refresh tokens (SHA-256 hash stored — plain token never persisted)
@@ -63,7 +111,11 @@ CREATE TABLE IF NOT EXISTS circle (
 /* ── REQUESTS ───────────────────────────────────────────────── */
 -- Live state of an order — row exists until a terminal transaction is created
 -- Columns marked "set at accept_request" are NULL until Ahmed accepts
--- Columns marked "set at submit_tracking" are NULL until Ahmed submits tracking
+-- Financial columns on requests:
+--   order amount         —  Sara locks this at confirm_payment
+--   platform_fee       — set at submit_tracking (5% of actual_saving)
+--   incentive_fee      — set at submit_tracking (25% of actual_saving)
+--   actual_amount_paid — set at submit_tracking (Ahmed's checkout total)
 -- 'completed' and 'disputed' are not in rq_status — those states immediately
 -- create a transaction row and delete this request row
 CREATE TABLE IF NOT EXISTS requests (
@@ -78,13 +130,10 @@ CREATE TABLE IF NOT EXISTS requests (
   discount_percentage  INT NOT NULL DEFAULT 0,
   note                 TEXT,
 
-  -- set at accept_request
+  -- set at submit_tracking
   platform_fee         INT,
   incentive_fee        INT,
-  total_paid           INT,
-
-  -- set at submit_tracking
-  screenshot_url          VARCHAR(200),
+  screenshot_url       VARCHAR(200),
   actual_amount_paid   INT,
   dispute_deadline     BIGINT,  -- set at submit_tracking: Sara confirm/dispute window ends here (30 min)
   rq_status            VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (rq_status IN ('pending', 'payment_pending', 'escrow_locked', 'tracking_submitted')),
@@ -116,7 +165,6 @@ CREATE TABLE IF NOT EXISTS transactions (
   card_tier            VARCHAR(50) NOT NULL,
   platform_fee         INT NOT NULL DEFAULT 0,
   incentive_fee        INT NOT NULL DEFAULT 0,
-  total_paid           INT NOT NULL,
   actual_amount_paid   INT,
   txn_status           VARCHAR(20) NOT NULL CHECK (txn_status IN ('completed', 'cancelled', 'refunded', 'disputed')),
   screenshot_url          VARCHAR(200),
@@ -158,6 +206,11 @@ CREATE INDEX IF NOT EXISTS idx_circle_friend       ON circle(friend_id);
 CREATE INDEX IF NOT EXISTS idx_requests_requester  ON requests(requester_id);
 CREATE INDEX IF NOT EXISTS idx_requests_holder     ON requests(card_holder_id);
 CREATE INDEX IF NOT EXISTS idx_requests_status     ON requests(rq_status);
+CREATE INDEX IF NOT EXISTS idx_requests_status_expires
+  ON requests (rq_status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_requests_dispute_deadline
+  ON requests (dispute_deadline)
+  WHERE rq_status = 'tracking_submitted';
 CREATE INDEX IF NOT EXISTS idx_txn_requester       ON transactions(requester_id);
 CREATE INDEX IF NOT EXISTS idx_txn_holder          ON transactions(card_holder_id);
 CREATE INDEX IF NOT EXISTS idx_chat_request        ON chat_messages(request_id);
@@ -166,7 +219,12 @@ CREATE INDEX IF NOT EXISTS idx_chat_request        ON chat_messages(request_id);
 /* ─────────────────────────────────────────────────────────────
    AUTH
    Flow: store_otp → verify_otp (login + bind_device, revokes old refresh)
-         → get_login_status → verify_pin
+         OTP limits: 60s cooldown, 1 resend, 3 tries/code, 6 fails/round → otp_phone_lockout
+         Success clears otp_phone_lockout row for that phone
+         → get_login_status → PIN screen → verify_pin (bcrypt in Node + pin_phone_lockout)
+         PIN limits: 4 fails/round → pin_phone_lockout; success deletes that row
+         Forgot PIN (known device): security Q → pin_reset_grants → new PIN
+         Security answer: 3 fails → security_answer_lockout permanent
          → backend issues access JWT (~15 min) + store_refresh_token (~30 days)
          → validate_refresh_token / rotate_refresh_token on /auth/refresh
    ───────────────────────────────────────────────────────────── */
@@ -199,19 +257,60 @@ $$ LANGUAGE plpgsql;
 
 
 -- Backend generates OTP and stores its hash before sending SMS
+-- Enforces: phone lockout, 60s cooldown, max 1 resend (2 codes per round)
 CREATE OR REPLACE PROCEDURE store_otp(
   p_phone      VARCHAR(20),
   p_otp_hash   TEXT,
   p_expires_at BIGINT
 ) AS $$
+DECLARE
+  v_now  BIGINT;
+  v_lock RECORD;
+  v_otp  RECORD;
 BEGIN
-  INSERT INTO otps (phone, otp_hash, expires_at, last_sent_at, attempts)
-  VALUES (p_phone, p_otp_hash, p_expires_at, extract(epoch from now()) * 1000, 0)
-  ON CONFLICT (phone) DO UPDATE
-  SET otp_hash     = p_otp_hash,
-      expires_at   = p_expires_at,
-      last_sent_at = extract(epoch from now()) * 1000,
-      attempts     = 0;
+  v_now := extract(epoch from now()) * 1000;
+
+  SELECT * INTO v_lock FROM otp_phone_lockout WHERE phone = p_phone;
+  IF FOUND THEN
+    IF v_lock.permanently_blocked = 1 THEN
+      RAISE EXCEPTION 'OTP_CONTACT_SUPPORT';
+    ELSIF v_lock.blocked_until IS NOT NULL AND v_lock.blocked_until > v_now THEN
+      RAISE EXCEPTION 'OTP_LOCKED:%', v_lock.blocked_until;
+    END IF;
+  END IF;
+
+  SELECT * INTO v_otp FROM otps WHERE phone = p_phone;
+
+  IF FOUND THEN
+    IF v_now < v_otp.expires_at THEN
+      IF v_now - v_otp.last_sent_at < 60000 THEN
+        RAISE EXCEPTION 'OTP_COOLDOWN:%', (60000 - (v_now - v_otp.last_sent_at));
+      END IF;
+
+      IF v_otp.resend_count >= 1 THEN
+        RAISE EXCEPTION 'Maximum OTP resends reached. Please verify your code.';
+      END IF;
+
+      UPDATE otps
+      SET otp_hash     = p_otp_hash,
+          expires_at   = p_expires_at,
+          last_sent_at = v_now,
+          attempts     = 0,
+          resend_count = resend_count + 1
+      WHERE phone = p_phone;
+    ELSE
+      UPDATE otps
+      SET otp_hash     = p_otp_hash,
+          expires_at   = p_expires_at,
+          last_sent_at = v_now,
+          attempts     = 0,
+          resend_count = 0
+      WHERE phone = p_phone;
+    END IF;
+  ELSE
+    INSERT INTO otps (phone, otp_hash, expires_at, last_sent_at, attempts, resend_count)
+    VALUES (p_phone, p_otp_hash, p_expires_at, v_now, 0, 0);
+  END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -409,9 +508,26 @@ DECLARE
   v_user          JSON;
   v_user_id       VARCHAR(36);
   v_old_device_id VARCHAR(200);
+  v_lock          RECORD;
+  v_now           BIGINT;
+  v_fail_count    INT;
+  v_round         INT;
+  v_days          INT;
+  v_until         BIGINT;
 BEGIN
   IF p_device_id IS NULL OR p_device_id = '' THEN
     RAISE EXCEPTION 'Device ID cannot be empty.';
+  END IF;
+
+  v_now := extract(epoch from now()) * 1000;
+
+  SELECT * INTO v_lock FROM otp_phone_lockout WHERE phone = p_phone;
+  IF FOUND THEN
+    IF v_lock.permanently_blocked = 1 THEN
+      RAISE EXCEPTION 'OTP_CONTACT_SUPPORT';
+    ELSIF v_lock.blocked_until IS NOT NULL AND v_lock.blocked_until > v_now THEN
+      RAISE EXCEPTION 'OTP_LOCKED:%', v_lock.blocked_until;
+    END IF;
   END IF;
 
   SELECT * INTO v_otp FROM otps WHERE phone = p_phone;
@@ -420,7 +536,7 @@ BEGIN
     RAISE EXCEPTION 'No OTP found for this number.';
   END IF;
 
-  IF (extract(epoch from now()) * 1000) > v_otp.expires_at THEN
+  IF v_now > v_otp.expires_at THEN
     DELETE FROM otps WHERE phone = p_phone;
     RAISE EXCEPTION 'OTP has expired.';
   END IF;
@@ -431,10 +547,58 @@ BEGIN
 
   IF v_otp.otp_hash != p_otp_hash THEN
     UPDATE otps SET attempts = attempts + 1 WHERE phone = p_phone;
+
+    INSERT INTO otp_phone_lockout (phone, verify_fail_count, fail_round, permanently_blocked)
+    VALUES (p_phone, 0, 0, 0)
+    ON CONFLICT (phone) DO NOTHING;
+
+    UPDATE otp_phone_lockout
+    SET verify_fail_count = verify_fail_count + 1
+    WHERE phone = p_phone
+    RETURNING verify_fail_count, fail_round INTO v_fail_count, v_round;
+
+    IF v_fail_count >= 6 THEN
+      v_round := v_round + 1;
+
+      IF v_round >= 5 THEN
+        UPDATE otp_phone_lockout
+        SET fail_round          = v_round,
+            verify_fail_count   = 0,
+            blocked_until       = NULL,
+            permanently_blocked = 1
+        WHERE phone = p_phone;
+
+        DELETE FROM otps WHERE phone = p_phone;
+        RAISE EXCEPTION 'OTP_CONTACT_SUPPORT';
+      END IF;
+
+      v_days := CASE v_round
+        WHEN 1 THEN 1
+        WHEN 2 THEN 2
+        WHEN 3 THEN 4
+        WHEN 4 THEN 10
+        ELSE 10
+      END;
+
+      v_until := v_now + (v_days::bigint * 86400000);
+
+      UPDATE otp_phone_lockout
+      SET fail_round          = v_round,
+          verify_fail_count   = 0,
+          blocked_until       = v_until,
+          permanently_blocked = 0
+      WHERE phone = p_phone;
+
+      DELETE FROM otps WHERE phone = p_phone;
+      RAISE EXCEPTION 'OTP_LOCKED:%', v_until;
+    END IF;
+
     RAISE EXCEPTION 'Invalid OTP.';
   END IF;
 
   DELETE FROM otps WHERE phone = p_phone;
+
+  DELETE FROM otp_phone_lockout WHERE phone = p_phone;
 
   v_user := login_or_create_user(p_phone);
   v_user_id := (v_user->>'id');
@@ -500,7 +664,7 @@ $$ LANGUAGE plpgsql;
 /* ─────────────────────────────────────────────────────────────
    ONBOARDING
    Device is bound at verify_otp. Brand new users then:
-   update_profile → upsert_pin → complete_onboarding
+   update_profile → upsert_pin → upsert_security_question → complete_onboarding
    ───────────────────────────────────────────────────────────── */
 
 -- Step 1 — user sets their display name
@@ -537,7 +701,34 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Step 3 — final onboarding step (device already bound at OTP verify)
+-- Step 3 — user sets security question + answer hash (answer hashed in Node with bcrypt)
+CREATE OR REPLACE PROCEDURE upsert_security_question(
+  p_user_id      VARCHAR(36),
+  p_question     TEXT,
+  p_answer_hash  TEXT
+) AS $$
+BEGIN
+  IF p_question IS NULL OR TRIM(p_question) = '' THEN
+    RAISE EXCEPTION 'Security question is required.';
+  END IF;
+
+  IF p_answer_hash IS NULL OR p_answer_hash = '' THEN
+    RAISE EXCEPTION 'Security answer hash is required.';
+  END IF;
+
+  UPDATE users
+  SET security_question    = TRIM(p_question),
+      security_answer_hash = p_answer_hash
+  WHERE id = p_user_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'User not found.';
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Step 4 — final onboarding step (device already bound at OTP verify)
 CREATE OR REPLACE FUNCTION complete_onboarding(
   p_user_id VARCHAR(36)
 ) RETURNS JSON AS $$
@@ -548,8 +739,11 @@ BEGIN
     AND pin_hash IS NOT NULL
     AND display_name IS NOT NULL
     AND TRIM(display_name) != ''
+    AND security_question IS NOT NULL
+    AND TRIM(security_question) != ''
+    AND security_answer_hash IS NOT NULL
   ) THEN
-    RAISE EXCEPTION 'Profile and PIN must be set before completing onboarding.';
+    RAISE EXCEPTION 'Profile, PIN, and security question must be set before completing onboarding.';
   END IF;
 
   UPDATE users
@@ -570,11 +764,107 @@ $$ LANGUAGE plpgsql;
 
 /* ─────────────────────────────────────────────────────────────
    RETURNING USER LOGIN
-   get_login_status returns known_device → PIN screen → verify_pin
+   get_login_status returns known_device → PIN screen → verify_pin (backend + lockout procs)
    ───────────────────────────────────────────────────────────── */
 
--- Device is checked before PIN — avoids leaking whether PIN is correct to an untrusted device
--- Returns user + is_onboarded so backend can issue JWT
+-- Reject PIN verify when this phone is temp- or permanently blocked
+CREATE OR REPLACE PROCEDURE assert_pin_phone_allowed(
+  p_phone VARCHAR(20)
+) AS $$
+DECLARE
+  v_now  BIGINT;
+  v_lock RECORD;
+BEGIN
+  v_now := extract(epoch from now()) * 1000;
+
+  SELECT * INTO v_lock FROM pin_phone_lockout WHERE phone = p_phone;
+
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  IF v_lock.permanently_blocked = 1 THEN
+    RAISE EXCEPTION 'OTP_CONTACT_SUPPORT';
+  END IF;
+
+  IF v_lock.blocked_until IS NOT NULL AND v_lock.blocked_until > v_now THEN
+    RAISE EXCEPTION 'OTP_LOCKED:%', v_lock.blocked_until;
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Called by backend after a wrong PIN (bcrypt compare in Node)
+CREATE OR REPLACE PROCEDURE record_pin_fail(
+  p_phone VARCHAR(20)
+) AS $$
+DECLARE
+  v_now        BIGINT;
+  v_fail_count INT;
+  v_round      INT;
+  v_days       INT;
+  v_until      BIGINT;
+BEGIN
+  v_now := extract(epoch from now()) * 1000;
+
+  INSERT INTO pin_phone_lockout (phone, pin_fail_count, fail_round, permanently_blocked)
+  VALUES (p_phone, 0, 0, 0)
+  ON CONFLICT (phone) DO NOTHING;
+
+  UPDATE pin_phone_lockout
+  SET pin_fail_count = pin_fail_count + 1
+  WHERE phone = p_phone
+  RETURNING pin_fail_count, fail_round INTO v_fail_count, v_round;
+
+  IF v_fail_count >= 4 THEN
+    v_round := v_round + 1;
+
+    IF v_round >= 5 THEN
+      UPDATE pin_phone_lockout
+      SET fail_round          = v_round,
+          pin_fail_count      = 0,
+          blocked_until       = NULL,
+          permanently_blocked = 1
+      WHERE phone = p_phone;
+
+      RAISE EXCEPTION 'OTP_CONTACT_SUPPORT';
+    END IF;
+
+    v_days := CASE v_round
+      WHEN 1 THEN 1
+      WHEN 2 THEN 2
+      WHEN 3 THEN 4
+      WHEN 4 THEN 10
+      ELSE 10
+    END;
+
+    v_until := v_now + (v_days::bigint * 86400000);
+
+    UPDATE pin_phone_lockout
+    SET fail_round          = v_round,
+        pin_fail_count      = 0,
+        blocked_until       = v_until,
+        permanently_blocked = 0
+    WHERE phone = p_phone;
+
+    RAISE EXCEPTION 'OTP_LOCKED:%', v_until;
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Called by backend after successful PIN verify — lockout no longer applies
+CREATE OR REPLACE PROCEDURE clear_pin_phone_lockout(
+  p_phone VARCHAR(20)
+) AS $$
+BEGIN
+  DELETE FROM pin_phone_lockout WHERE phone = p_phone;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Legacy DB PIN compare (plain hash) — not used by backend; bcrypt.compare in auth.controller.js
+-- Lockout: assert_pin_phone_allowed → record_pin_fail / clear_pin_phone_lockout
 CREATE OR REPLACE FUNCTION verify_pin(
   p_phone     VARCHAR(20),
   p_pin_hash  TEXT,
@@ -613,33 +903,106 @@ $$ LANGUAGE plpgsql;
 
 
 /* ─────────────────────────────────────────────────────────────
-   FORGOT PIN / NEW DEVICE RECOVERY  — NOT IN MVP
-   Security question flow is disabled for MVP.
-   Forgot PIN → contact support.
-   New device  → OTP only, no security question step.
-
-Flow (post-MVP):
-   get_security_question → verify_security_answer
-   → (upsert_pin if forgot PIN) → (OTP on new device binds via verify_otp)
-   → verify_pin
+   FORGOT PIN (known device only)
+   get_forgot_pin_question → verify answer in Node (bcrypt)
+   → create_pin_reset_grant → complete_forgot_pin_reset
+   New device recovery → OTP only (unchanged).
    ───────────────────────────────────────────────────────────── */
 
-/*
--- Returns question text so UI can display it before asking user to answer
-CREATE OR REPLACE FUNCTION get_security_question(
+-- Reject if security answer attempts exhausted (3 fails → permanent)
+CREATE OR REPLACE PROCEDURE assert_security_answer_allowed(
   p_phone VARCHAR(20)
+) AS $$
+DECLARE
+  v_lock RECORD;
+BEGIN
+  SELECT * INTO v_lock FROM security_answer_lockout WHERE phone = p_phone;
+
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  IF v_lock.permanently_blocked = 1 THEN
+    RAISE EXCEPTION 'OTP_CONTACT_SUPPORT';
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Wrong security answer — 3rd fail permanently blocks (contact support)
+CREATE OR REPLACE PROCEDURE record_security_answer_fail(
+  p_phone VARCHAR(20)
+) AS $$
+DECLARE
+  v_count INT;
+BEGIN
+  INSERT INTO security_answer_lockout (phone, fail_count, permanently_blocked)
+  VALUES (p_phone, 0, 0)
+  ON CONFLICT (phone) DO NOTHING;
+
+  UPDATE security_answer_lockout
+  SET fail_count = fail_count + 1
+  WHERE phone = p_phone
+  RETURNING fail_count INTO v_count;
+
+  IF v_count >= 3 THEN
+    UPDATE security_answer_lockout
+    SET permanently_blocked = 1
+    WHERE phone = p_phone;
+
+    RAISE EXCEPTION 'OTP_CONTACT_SUPPORT';
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- After correct answer — 15 minute window to set a new PIN (overwrites prior grant)
+CREATE OR REPLACE PROCEDURE create_pin_reset_grant(
+  p_phone VARCHAR(20)
+) AS $$
+DECLARE
+  v_now BIGINT;
+BEGIN
+  v_now := extract(epoch from now()) * 1000;
+
+  DELETE FROM security_answer_lockout WHERE phone = p_phone;
+
+  INSERT INTO pin_reset_grants (phone, expires_at, created_at)
+  VALUES (p_phone, v_now + 900000, v_now)
+  ON CONFLICT (phone) DO UPDATE
+  SET expires_at = EXCLUDED.expires_at,
+      created_at = EXCLUDED.created_at;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Step 1 of forgot PIN — returns question text for known device
+CREATE OR REPLACE FUNCTION get_forgot_pin_question(
+  p_phone     VARCHAR(20),
+  p_device_id VARCHAR(200)
 ) RETURNS JSON AS $$
 DECLARE
   v_user RECORD;
 BEGIN
+  CALL assert_security_answer_allowed(p_phone);
+
   SELECT * INTO v_user FROM users WHERE phone = p_phone;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'User not found.';
   END IF;
 
-  IF v_user.security_question IS NULL THEN
-    RAISE EXCEPTION 'No security question set for this account.';
+  IF v_user.pin_hash IS NULL THEN
+    RAISE EXCEPTION 'PIN not set. Please complete registration.';
+  END IF;
+
+  IF v_user.device_id IS NULL OR v_user.device_id != p_device_id THEN
+    RAISE EXCEPTION 'Unrecognised device. Please verify your phone number.';
+  END IF;
+
+  IF v_user.security_question IS NULL OR TRIM(v_user.security_question) = ''
+     OR v_user.security_answer_hash IS NULL THEN
+    RAISE EXCEPTION 'Security question not set.';
   END IF;
 
   RETURN json_build_object('security_question', v_user.security_question);
@@ -647,38 +1010,43 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Verifies the answer — returns user so backend can issue a scoped JWT for PIN reset or device link
-CREATE OR REPLACE FUNCTION verify_security_answer(
-  p_phone                VARCHAR(20),
-  p_security_answer_hash TEXT
-) RETURNS JSON AS $$
+-- Step 3 of forgot PIN — valid grant + device match → new PIN, cleanup, revoke refresh
+CREATE OR REPLACE PROCEDURE complete_forgot_pin_reset(
+  p_phone      VARCHAR(20),
+  p_device_id  VARCHAR(200),
+  p_pin_hash   TEXT
+) AS $$
 DECLARE
+  v_now  BIGINT;
   v_user RECORD;
+  v_grant RECORD;
 BEGIN
+  v_now := extract(epoch from now()) * 1000;
+
   SELECT * INTO v_user FROM users WHERE phone = p_phone;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'User not found.';
   END IF;
 
-  IF v_user.security_question IS NULL THEN
-    RAISE EXCEPTION 'No security question set.';
+  IF v_user.device_id IS NULL OR v_user.device_id != p_device_id THEN
+    RAISE EXCEPTION 'Unrecognised device. Please verify your phone number.';
   END IF;
 
-  IF v_user.security_answer_hash != p_security_answer_hash THEN
-    RAISE EXCEPTION 'Incorrect answer.';
+  SELECT * INTO v_grant FROM pin_reset_grants WHERE phone = p_phone;
+
+  IF NOT FOUND OR v_now >= v_grant.expires_at THEN
+    RAISE EXCEPTION 'PIN reset window expired. Please verify your security answer again.';
   END IF;
 
-  RETURN (
-    SELECT row_to_json(u)
-    FROM (
-      SELECT id, phone, display_name, security_question
-      FROM users WHERE id = v_user.id
-    ) u
-  );
+  UPDATE users SET pin_hash = p_pin_hash WHERE id = v_user.id;
+
+  DELETE FROM pin_reset_grants WHERE phone = p_phone;
+  DELETE FROM pin_phone_lockout WHERE phone = p_phone;
+
+  CALL revoke_refresh_tokens(v_user.id);
 END;
 $$ LANGUAGE plpgsql;
-*/
 
 
 /* ─────────────────────────────────────────────────────────────
@@ -1080,9 +1448,10 @@ $$ LANGUAGE plpgsql;
 
 -- Case 1: escrow_locked for 30 mins — Ahmed never submitted tracking — refund Sara full order_amount
 -- Case 2: tracking_submitted past dispute_deadline — Sara did not confirm or dispute:
---           Ahmed receives  actual_amount_paid + incentive_fee (25% of expected_saving)
---           Platform takes  platform_fee (5% of expected_saving)
---           Sara gets back  order_amount − actual_amount_paid − incentive_fee − platform_fee (70% of saving)
+--           actual_saving = order_amount − actual_amount_paid (fees set at submit_tracking)
+--           Ahmed receives  actual_amount_paid + incentive_fee (25% of actual_saving)
+--           Platform takes  platform_fee (5% of actual_saving)
+--           Sara gets back  order_amount − actual_amount_paid − incentive_fee − platform_fee (70% of actual_saving)
 -- Both cases: INSERT sealed transaction record, DELETE request row
 CREATE OR REPLACE PROCEDURE auto_release_escrow() AS $$
 DECLARE
@@ -1095,19 +1464,19 @@ BEGIN
     FROM requests r
     JOIN cards c ON c.id = r.card_id
     WHERE r.rq_status = 'escrow_locked'
-    AND r.total_paid IS NOT NULL
+    AND r.order_amount IS NOT NULL
     AND (extract(epoch from now()) * 1000) > r.expires_at
     FOR UPDATE OF r
   LOOP
     UPDATE users
-    SET wallet_balance = wallet_balance + v_req.total_paid
+    SET wallet_balance = wallet_balance + v_req.order_amount
     WHERE id = v_req.requester_id;
 
     INSERT INTO transactions (
       id, requester_id, card_holder_id, merchant, product_url,
       delivery_address, order_amount, discount_percentage, note,
       bank_name, card_type, card_tier,
-      platform_fee, incentive_fee, total_paid, actual_amount_paid,
+      platform_fee, incentive_fee, actual_amount_paid,
       txn_status, screenshot_url, dispute_reason,
       created_at, updated_at
     ) VALUES (
@@ -1115,7 +1484,7 @@ BEGIN
       v_req.merchant, v_req.product_url, v_req.delivery_address,
       v_req.order_amount, v_req.discount_percentage, v_req.note,
       v_req.bank_name, v_req.card_type, v_req.card_tier,
-      v_req.platform_fee, v_req.incentive_fee, v_req.total_paid, NULL,
+      v_req.platform_fee, v_req.incentive_fee, NULL,
       'refunded', NULL, NULL,
       extract(epoch from now()) * 1000, extract(epoch from now()) * 1000
     );
@@ -1144,14 +1513,14 @@ BEGIN
     WHERE id = 1;
 
     UPDATE users
-    SET wallet_balance = wallet_balance + (v_req.total_paid - v_req.actual_amount_paid - v_req.incentive_fee - v_req.platform_fee)
+    SET wallet_balance = wallet_balance + (v_req.order_amount - v_req.actual_amount_paid - v_req.incentive_fee - v_req.platform_fee)
     WHERE id = v_req.requester_id;
 
     INSERT INTO transactions (
       id, requester_id, card_holder_id, merchant, product_url,
       delivery_address, order_amount, discount_percentage, note,
       bank_name, card_type, card_tier,
-      platform_fee, incentive_fee, total_paid, actual_amount_paid,
+      platform_fee, incentive_fee, actual_amount_paid,
       txn_status, screenshot_url, dispute_reason,
       created_at, updated_at
     ) VALUES (
@@ -1159,7 +1528,7 @@ BEGIN
       v_req.merchant, v_req.product_url, v_req.delivery_address,
       v_req.order_amount, v_req.discount_percentage, v_req.note,
       v_req.bank_name, v_req.card_type, v_req.card_tier,
-      v_req.platform_fee, v_req.incentive_fee, v_req.total_paid, v_req.actual_amount_paid,
+      v_req.platform_fee, v_req.incentive_fee, v_req.actual_amount_paid,
       'completed', v_req.screenshot_url, NULL,
       extract(epoch from now()) * 1000, extract(epoch from now()) * 1000
     );

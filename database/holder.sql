@@ -47,14 +47,13 @@ $$ LANGUAGE plpgsql;
 
 -- Ahmed accepts Sara's request
 -- Row locked with FOR UPDATE — competes with decline_request, cancel_request, and auto_expire_requests
+-- Fees are NOT set here — calculated at submit_tracking from actual_amount_paid
 CREATE OR REPLACE FUNCTION accept_request(
   p_request_id VARCHAR(36),
   p_holder_id  VARCHAR(36)
 ) RETURNS JSON AS $$
 DECLARE
-  v_request       RECORD;
-  v_platform_fee  INT;
-  v_incentive_fee INT;
+  v_request RECORD;
 BEGIN
   SELECT * INTO v_request FROM requests
   WHERE id = p_request_id
@@ -71,26 +70,18 @@ BEGIN
     RAISE EXCEPTION 'Request has expired.';
   END IF;
 
-  v_platform_fee  := ROUND(v_request.order_amount * (v_request.discount_percentage / 100.0) * 0.05);
-  v_incentive_fee := ROUND(v_request.order_amount * (v_request.discount_percentage / 100.0) * 0.25);
-
-  -- Store fee snapshot, move to payment_pending
-  -- expires_at repurposed as Sara's 3 min payment window from this moment
   UPDATE requests
-  SET rq_status     = 'payment_pending',
-      platform_fee  = v_platform_fee,
-      incentive_fee = v_incentive_fee,
-      total_paid    = v_request.order_amount,
-      expires_at    = (extract(epoch from now()) * 1000) + 600000,
-      updated_at    = extract(epoch from now()) * 1000
+  SET rq_status  = 'payment_pending',
+      total_paid = v_request.order_amount,
+      expires_at = (extract(epoch from now()) * 1000) + 600000,
+      updated_at = extract(epoch from now()) * 1000
   WHERE id = p_request_id;
 
   RETURN (
     SELECT row_to_json(r)
     FROM (
       SELECT id, merchant, order_amount, discount_percentage,
-             platform_fee, incentive_fee, total_paid,
-             rq_status, expires_at, updated_at
+             total_paid, rq_status, expires_at, updated_at
       FROM requests WHERE id = p_request_id
     ) r
   );
@@ -172,7 +163,7 @@ BEGIN
     v_request.merchant, v_request.product_url, v_request.delivery_address,
     v_request.order_amount, v_request.discount_percentage, v_request.note,
     v_card.bank_name, v_card.card_type, v_card.card_tier,
-    v_request.platform_fee, v_request.incentive_fee, v_request.total_paid, NULL,
+    COALESCE(v_request.platform_fee, 0), COALESCE(v_request.incentive_fee, 0), v_request.total_paid, NULL,
     'cancelled', NULL, NULL,
     extract(epoch from now()) * 1000, extract(epoch from now()) * 1000
   );
@@ -233,16 +224,20 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Ahmed submits screenshot after placing the order
+-- Ahmed submits screenshot + checkout amount after placing the order
+-- Fees calculated here from actual_saving = order_amount − actual_amount_paid
 -- Row locked with FOR UPDATE — competes with cancel_request_holder and cron Case 1
 CREATE OR REPLACE FUNCTION submit_tracking(
-  p_request_id           VARCHAR(36),
-  p_holder_id            VARCHAR(36),
-  p_screenshot_url          VARCHAR(200),
-  p_actual_amount_paid   INT
+  p_request_id         VARCHAR(36),
+  p_holder_id          VARCHAR(36),
+  p_screenshot_url     VARCHAR(200),
+  p_actual_amount_paid INT
 ) RETURNS JSON AS $$
 DECLARE
-  v_request RECORD;
+  v_request         RECORD;
+  v_actual_saving   INT;
+  v_platform_fee    INT;
+  v_incentive_fee   INT;
 BEGIN
   SELECT * INTO v_request FROM requests
   WHERE id = p_request_id
@@ -262,25 +257,30 @@ BEGIN
     RAISE EXCEPTION 'Actual amount paid must be greater than zero.';
   END IF;
 
-  -- actual_amount_paid + fees must not exceed order_amount (what Sara locked)
-  -- ensures Sara always saves money and the escrow covers everything
-  IF (p_actual_amount_paid + v_request.incentive_fee + v_request.platform_fee) > v_request.order_amount THEN
-    RAISE EXCEPTION 'Actual amount paid exceeds the escrowed amount. Please cancel the request instead.';
+  IF p_actual_amount_paid > v_request.order_amount THEN
+    RAISE EXCEPTION 'Actual amount paid cannot exceed the order amount.';
   END IF;
 
+  v_actual_saving   := v_request.order_amount - p_actual_amount_paid;
+  v_platform_fee    := ROUND(v_actual_saving * 0.05);
+  v_incentive_fee   := ROUND(v_actual_saving * 0.25);
+
   UPDATE requests
-  SET screenshot_url       = p_screenshot_url,
-      actual_amount_paid   = p_actual_amount_paid,
-      rq_status            = 'tracking_submitted',
-      dispute_deadline     = (extract(epoch from now()) * 1000) + 1800000,
-      updated_at           = extract(epoch from now()) * 1000
+  SET screenshot_url     = p_screenshot_url,
+      actual_amount_paid = p_actual_amount_paid,
+      platform_fee       = v_platform_fee,
+      incentive_fee      = v_incentive_fee,
+      rq_status          = 'tracking_submitted',
+      dispute_deadline   = (extract(epoch from now()) * 1000) + 1800000,
+      updated_at         = extract(epoch from now()) * 1000
   WHERE id = p_request_id;
 
   RETURN (
     SELECT row_to_json(r)
     FROM (
-      SELECT id, screenshot_url,
-             actual_amount_paid, rq_status, dispute_deadline, updated_at
+      SELECT id, screenshot_url, actual_amount_paid,
+             platform_fee, incentive_fee,
+             rq_status, dispute_deadline, updated_at
       FROM requests WHERE id = p_request_id
     ) r
   );

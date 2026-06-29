@@ -4,7 +4,7 @@
    CARD REQUESTER (Sara)
    Flow: create_request → cancel_request (pending or payment_pending, before Sara pays)
          → [Ahmed accepts → payment_pending] → confirm_payment (Sara pays, escrow locks)
-         → get_outgoing_requests / get_request_requester (view progress)
+         → get_request_requester (view current active purchase)
          → confirm_tracking (approve immediately) / raise_dispute (reject within 30 min)
          → get_transaction_history_requester (view past completed orders)
    ───────────────────────────────────────────────────────────── */
@@ -27,7 +27,10 @@ CREATE OR REPLACE FUNCTION create_request(
   p_note                TEXT
 ) RETURNS JSON AS $$
 DECLARE
-  v_request_id VARCHAR(36);
+  v_request_id        VARCHAR(36);
+  v_expected_saving   INT;
+  v_est_platform_fee  INT;
+  v_est_incentive_fee INT;
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM circle
@@ -44,7 +47,7 @@ BEGIN
     AND user_id = p_card_holder_id
     AND allow_sharing = 1
   ) THEN
-    RAISE EXCEPTION 'Card not found or not available for sharing.';
+    RAISE EXCEPTION 'Card not found.';
   END IF;
 
   IF EXISTS (
@@ -60,6 +63,10 @@ BEGIN
   END IF;
 
   v_request_id := uuid_generate_v4()::varchar;
+
+  v_expected_saving   := ROUND(p_order_amount * (p_discount_percentage / 100.0));
+  v_est_platform_fee  := ROUND(v_expected_saving * 0.05);
+  v_est_incentive_fee := ROUND(v_expected_saving * 0.25);
 
   INSERT INTO requests (
     id, requester_id, card_holder_id, card_id, merchant,
@@ -79,7 +86,10 @@ BEGIN
     FROM (
       SELECT id, requester_id, card_holder_id, card_id, merchant,
              product_url, order_amount, discount_percentage, note,
-             rq_status, expires_at, created_at
+             rq_status, expires_at, created_at,
+             v_expected_saving   AS estimated_saving,
+             v_est_platform_fee  AS estimated_platform_fee,
+             v_est_incentive_fee AS estimated_incentive_fee
       FROM requests WHERE id = v_request_id
     ) r
   );
@@ -105,7 +115,7 @@ BEGIN
   FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
+    RAISE EXCEPTION 'Request not found, access denied or access denied.';
   END IF;
 
   DELETE FROM requests WHERE id = p_request_id;
@@ -164,8 +174,7 @@ BEGIN
   RETURN (
     SELECT row_to_json(r)
     FROM (
-      SELECT id, merchant, order_amount, platform_fee, incentive_fee,
-             total_paid, rq_status, expires_at, updated_at
+      SELECT id, merchant, order_amount, platform_fee, incentive_fee, rq_status, expires_at, updated_at
       FROM requests WHERE id = p_request_id
     ) r
   );
@@ -173,23 +182,12 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Sara views full detail of a single active request
--- dispute_deadline lets the frontend show Sara's confirm/dispute countdown
+-- Sara's current purchase (0 or 1 row) — lookup by requester_id only, not card_holder_id
+-- Returns null if she has no active request; dispute_deadline drives confirm/dispute UI
 CREATE OR REPLACE FUNCTION get_request_requester(
-  p_request_id   VARCHAR(36),
   p_requester_id VARCHAR(36)
 ) RETURNS JSON AS $$
-DECLARE
-  v_request RECORD;
 BEGIN
-  SELECT * INTO v_request FROM requests
-  WHERE id = p_request_id
-  AND requester_id = p_requester_id;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Request not found or access denied.';
-  END IF;
-
   RETURN (
     SELECT row_to_json(r)
     FROM (
@@ -204,7 +202,6 @@ BEGIN
         req.rq_status,
         req.platform_fee,
         req.incentive_fee,
-        req.total_paid,
         req.actual_amount_paid,
         req.screenshot_url,
         req.dispute_deadline,
@@ -218,7 +215,8 @@ BEGIN
       FROM requests req
       JOIN users u ON u.id = req.card_holder_id
       JOIN cards c ON c.id = req.card_id
-      WHERE req.id = p_request_id
+      WHERE req.requester_id = p_requester_id
+      AND req.rq_status IN ('pending', 'payment_pending', 'escrow_locked', 'tracking_submitted')
     ) r
   );
 END;
@@ -267,7 +265,7 @@ BEGIN
   -- Refund Sara her 70% of saving: order_amount − actual_amount_paid − incentive_fee − platform_fee
   -- e.g. order 10000, 20% discount → saving 2000 → Ahmed 500, platform 100, Sara gets back 1400
   UPDATE users
-  SET wallet_balance = wallet_balance + (v_request.total_paid - v_request.actual_amount_paid - v_request.incentive_fee - v_request.platform_fee)
+  SET wallet_balance = wallet_balance + (v_request.order_amount - v_request.actual_amount_paid - v_request.incentive_fee - v_request.platform_fee)
   WHERE id = v_request.requester_id;
 
   v_txn_id := uuid_generate_v4()::varchar;
@@ -276,7 +274,7 @@ BEGIN
     id, requester_id, card_holder_id, merchant, product_url,
     delivery_address, order_amount, discount_percentage, note,
     bank_name, card_type, card_tier,
-    platform_fee, incentive_fee, total_paid, actual_amount_paid,
+    platform_fee, incentive_fee, actual_amount_paid,
     txn_status, screenshot_url, dispute_reason,
     created_at, updated_at
   ) VALUES (
@@ -284,7 +282,7 @@ BEGIN
     v_request.merchant, v_request.product_url, v_request.delivery_address,
     v_request.order_amount, v_request.discount_percentage, v_request.note,
     v_card.bank_name, v_card.card_type, v_card.card_tier,
-    v_request.platform_fee, v_request.incentive_fee, v_request.total_paid, v_request.actual_amount_paid,
+    v_request.platform_fee, v_request.incentive_fee, v_request.actual_amount_paid,
     'completed', v_request.screenshot_url, NULL,
     extract(epoch from now()) * 1000, extract(epoch from now()) * 1000
   );
@@ -334,7 +332,7 @@ BEGIN
 
   -- Refund Sara immediately
   UPDATE users
-  SET wallet_balance = wallet_balance + v_request.total_paid
+  SET wallet_balance = wallet_balance + v_request.order_amount
   WHERE id = v_request.requester_id;
 
   v_txn_id := uuid_generate_v4()::varchar;
@@ -343,7 +341,7 @@ BEGIN
     id, requester_id, card_holder_id, merchant, product_url,
     delivery_address, order_amount, discount_percentage, note,
     bank_name, card_type, card_tier,
-    platform_fee, incentive_fee, total_paid, actual_amount_paid,
+    platform_fee, incentive_fee, actual_amount_paid,
     txn_status, screenshot_url, dispute_reason,
     created_at, updated_at
   ) VALUES (
@@ -351,7 +349,7 @@ BEGIN
     v_request.merchant, v_request.product_url, v_request.delivery_address,
     v_request.order_amount, v_request.discount_percentage, v_request.note,
     v_card.bank_name, v_card.card_type, v_card.card_tier,
-    v_request.platform_fee, v_request.incentive_fee, v_request.total_paid, v_request.actual_amount_paid,
+    v_request.platform_fee, v_request.incentive_fee, v_request.actual_amount_paid,
     'disputed', v_request.screenshot_url, p_reason,
     extract(epoch from now()) * 1000, extract(epoch from now()) * 1000
   );
@@ -388,7 +386,6 @@ BEGIN
         txn.card_tier,
         txn.platform_fee,
         txn.incentive_fee,
-        txn.total_paid,
         txn.actual_amount_paid,
         txn.txn_status,
         txn.screenshot_url,
