@@ -1,123 +1,17 @@
-Here is the full logic document:
+29/06/2026:
 
----
+get login status in backend and databse check if phone is present. if no then new user
+if phone exists in the db but device id  doesnt match, then it is a new device
+if both true then an existing user 
 
-CardCircle V1 — Complete Database Logic & Decision Document
 
----
+currently  we are using wallet balance to simualte fake money transactions
+later, after psp approval, we will replace  wallet balance with total earned and total saved using our app only
 
-OVERVIEW
+All monetary amounts in the app are whole PKR (Pakistani Rupees), stored as integers.
+Example: order_amount 15000 = Rs 15,000. We do not use paisa (fractional rupees).
 
-CardCircle is a trust-based platform where people share bank card discounts within their personal circle of friends and family. The two roles are the Requester (Sara) who wants to use a discount she does not have a card for, and the Card Holder (Ahmed) who has the card and places the order on Sara's behalf and earns a small fee. Money is held in escrow and released once Sara confirms the tracking ID submitted by Ahmed.
 
----
-
-TABLES
-
-USERS
-The users table was stripped down aggressively because this is a financial application not a social media platform. Fields like username, bio, city, profile picture, trust score, trust count, strike count, total earned, and total saved were all removed. Trust score was removed because the circle is friends and family only — you already trust these people. Running totals like total earned and total saved were removed because they can go out of sync during refunds and are better computed from the transactions table when needed. Social fields like bio and profile picture have no place in a financial app.
-
-What was kept: id, phone, display_name, pin_hash, wallet_balance, security_question, security_answer_hash, created_at.
-
-pin_hash is stored here because after the first OTP verification the user sets a PIN and all subsequent logins use that PIN instead of OTP, exactly like Easypaisa and JazzCash. security_question and security_answer_hash are optional fields used only in the forgot PIN flow to protect against phone theft by strangers.
-
-wallet_balance exists for both Sara and Ahmed. Ahmed accumulates incentive earnings here. Sara receives refunds here if a transaction auto releases back to her. Withdrawals to JazzCash or Easypaisa are a V2 feature.
-
-OTPS
-The OTP table uses phone as the primary key instead of a UUID because you never look up an OTP by ID, you always look it up by phone. This also naturally enforces one OTP row per phone at the schema level. The row is deleted on successful verification so there are no stale rows and no is_used flag is needed. last_sent_at is stored to enforce the 60 second resend cooldown on the backend. attempts tracks how many wrong guesses have been made per OTP, capped at 3 after which the user must request a new OTP.
-
-No freeze or device ID system was added because this is a friends and family app. Nobody is going to brute force OTP on a trust circle application. Keeping it simple with 3 attempts and a 60 second cooldown is sufficient.
-
-CARDS
-The cards table was simplified significantly. per_txn_limit, monthly_cap, is_frozen, and is_active were all removed because they were leftovers from an earlier version of the idea where Ahmed would hand over a virtual card to Sara. That idea was scrapped. Ahmed never hands over his card. He places orders himself on his own device. The only thing that matters is whether his card is visible to his circle or not, which is what allow_sharing controls. allow_sharing defaults to 0 meaning cards are private by default and Ahmed must explicitly enable sharing per card.
-
-bank_name, card_type, and card_tier all have CHECK constraints against real Pakistani bank and card lists to prevent garbage data being inserted.
-
-DISCOUNTS
-The discounts table was dropped entirely. It was originally designed for a deal feed where Ahmed would proactively post discounts and Sara would browse them. This was dropped because we decided Sara initiates requests directly. She already knows what discount she wants to use. A separate deals feed adds complexity without adding value for V1.
-
-CIRCLE
-The circle table uses a composite primary key of user_id and friend_id instead of a separate UUID id column because the pair is already unique and the UUID adds nothing. The bidirectional duplicate problem — where Ahmed adding Sara and Sara adding Ahmed could create two rows — is handled in the add_to_circle procedure which checks both directions before inserting. The c_status column has three values: pending when an invite is sent, accepted when the other person accepts, and declined when they decline. There are no per transaction limits or auto approve features — these were removed as unnecessary for a friends and family circle.
-
-REQUESTS
-A request is created when Sara initiates. It contains who she is requesting from, which card, the merchant, product URL, delivery address, order amount, and a note. There are no discount fields on the request — Sara is responsible for knowing the discount herself. The request has an rq_status and an expires_at set to 15 minutes from creation.
-
-Key decision: requests and transactions are separate tables. A request might never become a transaction if Ahmed declines or it expires. Creating a transaction row only when escrow is locked keeps the data clean and accurate.
-
-TRANSACTIONS
-A transaction row is only created at the moment Sara locks escrow. It stores the order amount, platform fee calculated at 2 percent, incentive fee calculated at 3 percent, total paid, txn_status, tracking ID submitted by Ahmed, and delivery expected date. Fees are calculated and stored as fixed values at the moment of escrow lock so there is no ambiguity later about what was agreed.
-
-CHAT MESSAGES
-Chat messages are linked to request_id not transaction_id. This is because chat between Sara and Ahmed can begin from the moment Ahmed accepts the request, which is before a transaction row exists. Linking to the request keeps the chat accessible throughout the entire lifecycle.
-
-DISPUTES TABLE
-Dropped entirely. The circle is friends and family. Major disputes are unlikely. The timer system handles edge cases automatically — if Ahmed never submits tracking Sara gets refunded, if Sara never confirms tracking Ahmed gets paid automatically. No manual dispute process is needed for V1.
-
-NOTIFICATIONS TABLE
-Dropped entirely. Push notifications are handled via Firebase FCM at the backend level. There is no need to store notification history in the database for V1.
-
----
-
-AUTH DECISIONS
-
-OTP is only used for first time registration and the forgot PIN flow. Every subsequent login uses a PIN, exactly like Easypaisa and JazzCash. This is because re-OTP every session would be annoying for a financial app people open regularly.
-
-There are no refresh tokens. Session timeout is handled entirely on the frontend. The app tracks the last activity timestamp and the background timestamp. If the user is inactive for 5 to 10 minutes inside the app, or the app is backgrounded for 5 to 10 minutes, the frontend deletes the JWT and shows the login screen. If the app is closed, re-login is required immediately on next open. The JWT access token is short lived at 15 minutes as the ultimate safety net even if frontend logic fails.
-
-No biometrics were added for V1. They require native modules which add complexity not worth it for an MVP.
-
-Security questions protect against phone theft. If someone steals your phone and tries to use the forgot PIN flow, the OTP arrives on the stolen phone but the thief cannot answer the security question because they are a stranger, not a friend. The question is chosen from a fixed dropdown on the frontend and the answer is stored as a hash. The security question is optional — if not set, the forgot PIN flow only requires OTP verification.
-
----
-
-TRANSACTION FLOW DECISIONS
-
-Sara creates a request. Ahmed has 15 minutes to accept or decline. If he does not respond the request auto expires.
-
-Escrow does not lock when Sara creates the request. It locks only after Ahmed accepts. This is because if money locked immediately on request creation, every decline or expiry would require a refund. That is unnecessary money movement. Money only moves when Ahmed has confirmed he will place the order.
-
-After Ahmed accepts, Sara has 15 minutes to lock escrow. If she does not, the request auto expires and Ahmed is freed. This protects Ahmed from being stuck in accepted state indefinitely waiting for Sara to pay.
-
-After escrow locks, Ahmed has 30 minutes to submit a tracking ID. This is longer than other timers because Ahmed needs to actually go to a website and place a physical order. If he does not submit tracking within 30 minutes, escrow auto refunds to Sara's wallet.
-
-After Ahmed submits tracking, Sara has 15 minutes to confirm it. She just needs to review that the tracking ID looks legitimate. If she does not confirm within 15 minutes, escrow auto releases to Ahmed anyway. This prevents Sara from holding Ahmed's payment hostage indefinitely.
-
-Sara confirms tracking not delivery. Waiting for physical delivery would take days or weeks. Ahmed should get paid as soon as he proves the order was placed. Escrow releases to Ahmed's wallet immediately upon Sara's confirmation.
-
-Total maximum transaction time if every timer runs to its limit: 15 minutes for Ahmed to accept, plus 15 minutes for Sara to lock escrow, plus 30 minutes for Ahmed to submit tracking, plus 15 minutes for Sara to confirm. That is 1 hour and 15 minutes maximum end to end.
-
----
-
-REQUEST LIMITS
-
-Sara can only have one active request at a time across her entire circle, not just per person. The reason is escrow — if two requests get accepted simultaneously Sara might not have enough wallet balance to lock escrow for both. Forcing one at a time prevents this entirely. A request is considered active if its status is pending, accepted, escrow locked, or tracking submitted.
-
-Ahmed can handle multiple active requests simultaneously. His situation is different from Sara's — he does not lock any money. His card limit is his own responsibility to manage. If his card gets declined at checkout he can decline the request himself or the 30 minute tracking timer will auto refund Sara. Restricting Ahmed to one request at a time would unnecessarily limit his earning potential with no real benefit.
-
----
-
-BACKGROUND JOBS
-
-Two cron jobs run every minute via node-cron on the backend.
-
-auto_expire_requests handles two cases. First it expires all pending requests where expires_at has passed — meaning Ahmed did not respond within 15 minutes. Second it expires all accepted requests where updated_at is more than 15 minutes ago — meaning Sara did not lock escrow within 15 minutes of Ahmed accepting.
-
-auto_release_escrow handles two cases. Case one finds all transactions stuck in escrow_locked status for more than 30 minutes, meaning Ahmed never submitted tracking. It refunds the full total_paid to Sara's wallet, marks the transaction as refunded, and marks the request as expired. Case two finds all transactions stuck in tracking_submitted status for more than 15 minutes, meaning Sara never confirmed the tracking. It credits Ahmed's wallet with total_paid minus platform_fee, marks the transaction as completed, and marks the request as completed.
-
----
-
-FEE STRUCTURE
-
-Platform fee is 2 percent of order amount. Ahmed's incentive fee is 3 percent of order amount. Both are calculated at the moment escrow locks and stored as fixed integer values in paisa on the transaction row. Sara pays total_paid which is order_amount plus platform_fee plus incentive_fee. Ahmed receives total_paid minus platform_fee. The platform keeps the platform_fee. For V1 testing with no real money these fees are calculated but not actually collected — this is a placeholder until real payment gateway integration in production.
-
----
-
-DELIVERY ADDRESS PRIVACY
-
-Sara's delivery address is stored on the requests table but is never exposed to Ahmed until escrow is locked. Before escrow locks the get_request_holder procedure returns NULL for the delivery address field. Once escrow locks the full address is returned so Ahmed can enter it at checkout. Sara always sees her own delivery address regardless of status since she is the one who entered it.
-
----
-
-V2 NOTES
-
-The core mechanic of trusted circle plus escrow plus coordination layer is the real asset of CardCircle, not the discount sharing specifically. Online card discounts in Pakistan are currently thin and mostly physical or in-store which do not fit the remote model. V2 directions worth exploring include group buying where multiple people chip in on a bulk order, proxy purchasing where someone in another city buys something on your behalf, bill splitting with escrow where friends commit payment before going out, and a service marketplace within the circle where trusted contacts offer skills with escrow protection on both sides. All of these use the exact same core infrastructure already built in V1.
+To add: 
+security question 
+email when a new device logs in

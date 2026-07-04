@@ -1,0 +1,244 @@
+CardCircle — Forgot PIN + Security Question Implementation
+=========================================================
+Date: 2026-06-25
+
+This document describes everything added or changed for security questions,
+forgot-PIN recovery (known device only), and related auth/onboarding updates.
+
+
+SUMMARY
+-------
+Users set a security question + answer during onboarding (after PIN, before complete).
+Forgot PIN on a known device: show question → verify answer → 15-minute DB grant → set new PIN.
+Security answer: 3 wrong attempts → permanent lockout (contact support). No ban ladder.
+Answer is bcrypt-hashed in Node (normalized: trim + lowercase). Question stored as plain text.
+On successful PIN reset: delete pin_reset_grants, delete pin_phone_lockout, revoke refresh tokens.
+No auto-login after reset — client shows PIN screen again.
+
+
+================================================================================
+NEW DATABASE TABLES
+================================================================================
+
+1. pin_reset_grants
+   -----------------
+   Purpose: Temporary permission to reset PIN after correct security answer.
+
+   Columns:
+   - phone       VARCHAR(20) PRIMARY KEY
+   - expires_at  BIGINT NOT NULL   — 15 minutes after grant created
+   - created_at  BIGINT NOT NULL
+
+   Rules:
+   - One row per phone (upsert on new correct answer)
+   - Deleted on successful PIN reset
+   - Reset rejected if missing or expires_at <= now
+
+
+2. security_answer_lockout
+   ------------------------
+   Purpose: Track wrong security answer attempts. Separate from OTP/PIN lockout.
+
+   Columns:
+   - phone               VARCHAR(20) PRIMARY KEY
+   - fail_count          INT NOT NULL DEFAULT 0
+   - permanently_blocked INT NOT NULL DEFAULT 0
+
+   Rules:
+   - Each wrong answer increments fail_count
+   - At fail_count >= 3: permanently_blocked = 1, raises OTP_CONTACT_SUPPORT
+   - No temp bans, no fail_round ladder
+   - Row deleted on correct security answer (via create_pin_reset_grant)
+
+
+================================================================================
+USERS TABLE CHANGES
+================================================================================
+
+Uncommented / added columns on users:
+- security_question    TEXT  — plain text, shown on forgot-PIN screen
+- security_answer_hash TEXT  — bcrypt hash set by backend (never plain answer)
+
+Migration alters (idempotent):
+- ALTER TABLE users ADD COLUMN IF NOT EXISTS security_question TEXT;
+- ALTER TABLE users ADD COLUMN IF NOT EXISTS security_answer_hash TEXT;
+
+
+================================================================================
+NEW DATABASE FUNCTIONS / PROCEDURES
+================================================================================
+
+1. upsert_security_question(p_user_id, p_question, p_answer_hash)  [PROCEDURE]
+   - Saves trimmed question + answer hash on users row
+   - Called during onboarding (authenticated)
+
+2. assert_security_answer_allowed(p_phone)  [PROCEDURE]
+   - If security_answer_lockout.permanently_blocked = 1 → OTP_CONTACT_SUPPORT
+   - Used before fetching question and before verifying answer
+
+3. record_security_answer_fail(p_phone)  [PROCEDURE]
+   - Upserts lockout row, increments fail_count
+   - At 3 fails: sets permanently_blocked, raises OTP_CONTACT_SUPPORT
+
+4. create_pin_reset_grant(p_phone)  [PROCEDURE]
+   - Deletes security_answer_lockout row (clean slate after correct answer)
+   - Inserts/updates pin_reset_grants with expires_at = now + 15 minutes
+
+5. get_forgot_pin_question(p_phone, p_device_id)  [FUNCTION → JSON]
+   - Checks security lockout not permanent
+   - Requires: user exists, PIN set, device_id matches bound device
+   - Requires: security question + answer hash set
+   - Returns: { "security_question": "..." }
+
+6. complete_forgot_pin_reset(p_phone, p_device_id, p_pin_hash)  [PROCEDURE]
+   - Validates pin_reset_grants exists and not expired
+   - Validates device_id matches
+   - Updates users.pin_hash
+   - DELETE pin_reset_grants
+   - DELETE pin_phone_lockout
+   - CALL revoke_refresh_tokens(user_id)
+
+
+================================================================================
+CHANGED DATABASE FUNCTIONS / PROCEDURES
+================================================================================
+
+1. complete_onboarding(p_user_id)
+   - Now also requires security_question and security_answer_hash to be set
+   - Error message updated accordingly
+
+2. verify_otp (from prior work — unchanged in this pass but related)
+   - On OTP success: DELETE FROM otp_phone_lockout (not just reset counter)
+
+Onboarding flow comment updated:
+   update_profile → upsert_pin → upsert_security_question → complete_onboarding
+
+AUTH flow comment updated to include forgot-PIN and security answer lockout.
+
+
+================================================================================
+REMOVED / REPLACED
+================================================================================
+
+- Removed old commented-out block: get_security_question, verify_security_answer
+  (plain hash compare in DB — replaced by Node bcrypt + new procedures above)
+
+- Legacy verify_pin(p_phone, p_pin_hash, p_device_id) DB function remains in schema
+  but is NOT used by backend (PIN verify uses bcrypt in auth.controller.js)
+
+
+================================================================================
+NEW BACKEND ROUTES
+================================================================================
+
+Onboarding (all require auth JWT):
+- POST /api/onboarding/security
+  Body: { security_question, security_answer }
+  Sets question + bcrypt answer hash
+
+Forgot PIN (no auth JWT — uses phone + device_id + grant):
+- POST /api/auth/forgot-pin/question
+  Body: { phone, device_id }
+  Returns: { security_question }
+
+- POST /api/auth/forgot-pin/verify-answer
+  Body: { phone, device_id, security_answer }
+  On success: creates pin_reset_grants, returns message + reset_expires_in_ms (900000)
+  On wrong answer: 401 Incorrect security answer (or 403 CONTACT_SUPPORT after 3 fails)
+
+- POST /api/auth/forgot-pin/reset
+  Body: { phone, device_id, pin }
+  On success: new PIN saved, grant cleared, pin lockout cleared, refresh revoked
+  Returns: { message: "PIN reset successful. Please log in with your new PIN." }
+  Does NOT issue access/refresh tokens (user must enter new PIN)
+
+
+================================================================================
+CHANGED BACKEND CODE
+================================================================================
+
+backend/controllers/onboarding.controller.js
+- Added normalizeSecurityAnswer helper (trim + lowercase)
+- Added setSecurityQuestion handler
+- Exported setSecurityQuestion
+
+backend/routes/onboarding.routes.js
+- Added POST /security route (auth middleware)
+
+backend/controllers/auth.controller.js
+- Added PIN_RESET_TTL_MS constant (15 min)
+- Added normalizeSecurityAnswer helper
+- Added getForgotPinQuestion
+- Added verifyForgotPinAnswer (bcrypt compare answer, record fails, create grant)
+- Added resetForgotPin (bcrypt hash new PIN, call complete_forgot_pin_reset)
+- Exported new handlers
+- mapOtpError reused for CONTACT_SUPPORT on security lockout
+
+backend/routes/auth.routes.js
+- Wired three forgot-pin routes
+
+backend/server.js
+- (Prior change) CORS tightened for localhost — not part of this feature but in repo
+
+
+================================================================================
+SECURITY RULES (AS IMPLEMENTED)
+================================================================================
+
+Security answer normalization:
+  answer.trim().toLowerCase() before bcrypt hash/compare
+
+Security question validation (onboarding):
+  - Min 5 characters (trimmed)
+  - Max enforced by DB TEXT / reasonable client limits
+
+Security answer validation (onboarding):
+  - Min 2 characters after normalization
+
+PIN validation (reset):
+  - Exactly 6 digits (same as onboarding PIN)
+
+Forgot PIN path:
+  - Known device ONLY (device_id must match users.device_id)
+  - New device recovery unchanged: OTP flow only
+
+Lockout independence:
+  - otp_phone_lockout  — OTP send/verify
+  - pin_phone_lockout    — PIN verify
+  - security_answer_lockout — forgot-PIN security answer
+  Success on one does not clear the others (except reset clears pin_phone_lockout)
+
+After PIN reset:
+  - refresh tokens revoked (must log in with new PIN)
+  - access JWT not explicitly revoked (15 min TTL expires naturally)
+
+
+================================================================================
+CLIENT TODO (NOT IMPLEMENTED IN THIS REPO)
+================================================================================
+
+Onboarding UI:
+  - Add security question + answer step after PIN, before complete
+
+Login / PIN screen:
+  - "Forgot PIN?" → question → answer → new PIN → back to PIN login
+  - Handle 403 CONTACT_SUPPORT (3 wrong security answers)
+  - Handle expired grant on reset ("verify security answer again")
+
+Onboarding order:
+  1. POST /api/onboarding/profile
+  2. POST /api/onboarding/pin
+  3. POST /api/onboarding/security   ← NEW
+  4. POST /api/onboarding/complete
+
+
+================================================================================
+FILES TOUCHED
+================================================================================
+
+database/schema.sql
+backend/controllers/onboarding.controller.js
+backend/controllers/auth.controller.js
+backend/routes/onboarding.routes.js
+backend/routes/auth.routes.js
+changes.txt  (this file)

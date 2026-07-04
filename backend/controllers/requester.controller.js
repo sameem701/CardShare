@@ -62,8 +62,7 @@ const cancelRequest = async (req, res) => {
 };
 
 // POST /api/requests/:id/payment
-// Sara confirms payment after Ahmed accepts (pay-on-accept)
-// Deducts wallet, locks escrow — must be called within 10 mins of Ahmed accepting
+// Sara confirms payment after Ahmed accepts (pay-on-accept) — locks escrow from wallet
 const confirmPayment = async (req, res) => {
   const requester_id = req.user.id;
   const request_id   = req.params.id;
@@ -96,7 +95,7 @@ const getActiveRequest = async (req, res) => {
 };
 
 // POST /api/requests/:id/confirm
-// Sara confirms the screenshot — pays Ahmed immediately without waiting for the timer
+// Sara confirms the screenshot — pays Ahmed and settles the order
 const confirmTracking = async (req, res) => {
   const requester_id = req.user.id;
   const request_id   = req.params.id;
@@ -113,7 +112,7 @@ const confirmTracking = async (req, res) => {
 };
 
 // POST /api/requests/:id/dispute
-// Sara raises a dispute within the 30 min window after tracking is submitted
+// Sara raises a dispute after tracking is submitted (anytime — no deadline)
 // Requires: reason in body
 const raiseDispute = async (req, res) => {
   const requester_id = req.user.id;

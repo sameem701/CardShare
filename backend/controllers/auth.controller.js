@@ -3,8 +3,13 @@ const bcrypt = require('bcryptjs');
 const jwt    = require('jsonwebtoken');
 const crypto = require('crypto');
 const { sendWhatsApp } = require('../utils/sms');
+const { getDeviceId } = require('../utils/requestDevice');
 
-const ACCESS_TTL_MS   = 15 * 60 * 1000;
+// Access JWT: { session_id, user_id } only — 5m TTL. No phone or device_id in payload.
+// Protected routes: Authorization Bearer + X-Device-Id header.
+// Session row + users.device_id checked in auth middleware on every request.
+
+const ACCESS_TTL_MS   = 5 * 60 * 1000;
 const REFRESH_TTL_MS  = 30 * 24 * 60 * 60 * 1000;
 const PIN_RESET_TTL_MS = 15 * 60 * 1000;
 
@@ -15,15 +20,10 @@ const sha256 = (str) => crypto.createHash('sha256').update(str).digest('hex');
 
 const generateRefreshToken = () => crypto.randomBytes(32).toString('hex');
 
-const issueToken = (user, device_id) => jwt.sign(
-  {
-    id: user.id,
-    phone: user.phone,
-    is_onboarded: user.is_onboarded,
-    device_id,
-  },
+const issueToken = (session_id, user_id) => jwt.sign(
+  { session_id, user_id },
   process.env.JWT_SECRET,
-  { expiresIn: '15m' }
+  { expiresIn: '5m' }
 );
 
 const stripSensitiveUserFields = (user) => {
@@ -76,11 +76,18 @@ const storeRefreshToken = async (user_id, device_id, plainToken) => {
 };
 
 const issueAuthResponse = async (user, device_id) => {
-  const token   = issueToken(user, device_id);
+  const { rows: sessionRows } = await db.query(
+    'SELECT create_session($1) AS result',
+    [user.id]
+  );
+  const session_id = sessionRows[0].result.session_id;
+
+  const token   = issueToken(session_id, user.id);
   const refresh = await storeRefreshToken(user.id, device_id, generateRefreshToken());
 
   return {
     token,
+    access_expires_in_ms: ACCESS_TTL_MS,
     ...refresh,
     user: stripSensitiveUserFields(user),
   };
@@ -316,12 +323,18 @@ const resetForgotPin = async (req, res) => {
 };
 
 // POST /api/auth/refresh
-// Rotates refresh token and issues a new 15m access JWT
+// Rotates refresh token and issues a new 5m access JWT (same session_id).
+// X-Device-Id header required; body device_id accepted as fallback.
 const refreshToken = async (req, res) => {
-  const { refresh_token, device_id } = req.body;
+  const { refresh_token } = req.body;
+  const device_id = getDeviceId(req, { allowBody: true });
 
-  if (!refresh_token || !device_id) {
-    return res.status(400).json({ error: 'refresh_token and device_id are required.' });
+  if (!refresh_token) {
+    return res.status(400).json({ error: 'refresh_token is required.' });
+  }
+
+  if (!device_id) {
+    return res.status(400).json({ error: 'X-Device-Id header is required.' });
   }
 
   const old_hash   = sha256(refresh_token);
@@ -336,6 +349,11 @@ const refreshToken = async (req, res) => {
     );
 
     const result = rows[0].result;
+
+    if (!result.session_id) {
+      return res.status(401).json({ error: 'Session revoked. Please log in again.' });
+    }
+
     const user = {
       id: result.user_id,
       phone: result.phone,
@@ -345,7 +363,8 @@ const refreshToken = async (req, res) => {
     };
 
     res.json({
-      token: issueToken(user, device_id),
+      token: issueToken(result.session_id, result.user_id),
+      access_expires_in_ms: ACCESS_TTL_MS,
       refresh_token: new_plain,
       refresh_expires_at: Number(result.expires_at),
       user: stripSensitiveUserFields({ ...user, device_id }),
@@ -356,7 +375,7 @@ const refreshToken = async (req, res) => {
 };
 
 // POST /api/auth/logout
-// Revokes refresh token and unbinds device (requires valid access JWT)
+// Revokes session + refresh; device binding kept (requires valid access JWT + X-Device-Id)
 const logout = async (req, res) => {
   try {
     await db.query('CALL logout_user($1)', [req.user.id]);

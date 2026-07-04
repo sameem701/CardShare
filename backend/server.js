@@ -4,8 +4,6 @@ const express    = require('express');
 const helmet     = require('helmet');
 const cors       = require('cors');
 
-require('./jobs/cron');
-
 const authRoutes       = require('./routes/auth.routes');
 const onboardingRoutes = require('./routes/onboarding.routes');
 const profileRoutes    = require('./routes/profile.routes');
@@ -45,6 +43,7 @@ app.use(cors({
       callback(null, false);
     }
   },
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Id'],
 }));
 app.use(express.json());
 
