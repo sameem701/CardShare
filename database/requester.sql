@@ -5,16 +5,15 @@
    Flow: create_request → cancel_request (pending or payment_pending, before Sara pays)
          → [Ahmed accepts → payment_pending] → confirm_payment (Sara pays, escrow locks)
          → get_request_requester (view current active purchase)
-         → confirm_tracking (approve immediately) / raise_dispute (reject within 30 min)
+         → confirm_tracking / raise_dispute (anytime after tracking submitted)
          → get_transaction_history_requester (view past completed orders)
+   No order timers — trust circle; parties coordinate at their own pace.
    ───────────────────────────────────────────────────────────── */
 
 
 -- Sara creates a request targeting one of Ahmed's shared cards
 -- Requires accepted circle membership and card availability
 -- Sara can have only one active request at a time across her entire circle
--- Upfront balance check — escrow locks automatically inside accept_request
--- Request expires in 15 mins if Ahmed does not respond
 CREATE OR REPLACE FUNCTION create_request(
   p_requester_id        VARCHAR(36),
   p_card_holder_id      VARCHAR(36),
@@ -71,12 +70,11 @@ BEGIN
   INSERT INTO requests (
     id, requester_id, card_holder_id, card_id, merchant,
     product_url, delivery_address, order_amount, discount_percentage, note,
-    rq_status, expires_at, created_at, updated_at
+    rq_status, created_at, updated_at
   ) VALUES (
     v_request_id, p_requester_id, p_card_holder_id, p_card_id, p_merchant,
     p_product_url, p_delivery_address, p_order_amount, p_discount_percentage, p_note,
     'pending',
-    (extract(epoch from now()) * 1000) + 900000,
     extract(epoch from now()) * 1000,
     extract(epoch from now()) * 1000
   );
@@ -86,7 +84,7 @@ BEGIN
     FROM (
       SELECT id, requester_id, card_holder_id, card_id, merchant,
              product_url, order_amount, discount_percentage, note,
-             rq_status, expires_at, created_at,
+             rq_status, created_at,
              v_expected_saving   AS estimated_saving,
              v_est_platform_fee  AS estimated_platform_fee,
              v_est_incentive_fee AS estimated_incentive_fee
@@ -99,8 +97,6 @@ $$ LANGUAGE plpgsql;
 
 -- Sara cancels her own request before escrow locks
 -- Allowed in pending or payment_pending — row locked with FOR UPDATE
--- pending: competes with accept_request, decline_request, and auto_expire_requests
--- payment_pending: competes with confirm_payment and auto_expire_requests
 CREATE OR REPLACE FUNCTION cancel_request(
   p_request_id   VARCHAR(36),
   p_requester_id VARCHAR(36)
@@ -133,8 +129,7 @@ $$ LANGUAGE plpgsql;
 
 
 -- Sara confirms payment after Ahmed accepts (pay-on-accept model)
--- Row locked with FOR UPDATE — competes with cancel_request and auto_expire_requests
--- Lock first, then validate expiry, then deduct wallet, then move to escrow_locked
+-- Row locked with FOR UPDATE — competes with cancel_request
 CREATE OR REPLACE FUNCTION confirm_payment(
   p_request_id   VARCHAR(36),
   p_requester_id VARCHAR(36)
@@ -152,11 +147,6 @@ BEGIN
     RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
   END IF;
 
-  IF (extract(epoch from now()) * 1000) > v_request.expires_at THEN
-    DELETE FROM requests WHERE id = p_request_id;
-    RAISE EXCEPTION 'Payment window has expired. Ahmed''s acceptance has been voided.';
-  END IF;
-
   IF (SELECT wallet_balance FROM users WHERE id = p_requester_id) < v_request.order_amount THEN
     RAISE EXCEPTION 'Insufficient wallet balance.';
   END IF;
@@ -167,14 +157,13 @@ BEGIN
 
   UPDATE requests
   SET rq_status  = 'escrow_locked',
-      expires_at = (extract(epoch from now()) * 1000) + 1800000,
       updated_at = extract(epoch from now()) * 1000
   WHERE id = p_request_id;
 
   RETURN (
     SELECT row_to_json(r)
     FROM (
-      SELECT id, merchant, order_amount, platform_fee, incentive_fee, rq_status, expires_at, updated_at
+      SELECT id, merchant, order_amount, platform_fee, incentive_fee, rq_status, updated_at
       FROM requests WHERE id = p_request_id
     ) r
   );
@@ -182,8 +171,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Sara's current purchase (0 or 1 row) — lookup by requester_id only, not card_holder_id
--- Returns null if she has no active request; dispute_deadline drives confirm/dispute UI
+-- Sara's current purchase (0 or 1 row)
 CREATE OR REPLACE FUNCTION get_request_requester(
   p_requester_id VARCHAR(36)
 ) RETURNS JSON AS $$
@@ -204,8 +192,6 @@ BEGIN
         req.incentive_fee,
         req.actual_amount_paid,
         req.screenshot_url,
-        req.dispute_deadline,
-        req.expires_at,
         req.created_at,
         req.updated_at,
         u.display_name AS card_holder_name,
@@ -223,9 +209,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Sara actively approves after seeing the screenshot
--- Pays Ahmed immediately — faster than waiting for auto_release_escrow
--- Row locked with FOR UPDATE; dispute_deadline is the single source of truth for the window
+-- Sara approves after seeing the screenshot — pays Ahmed and settles
+-- Row locked with FOR UPDATE — competes with raise_dispute
 CREATE OR REPLACE FUNCTION confirm_tracking(
   p_request_id   VARCHAR(36),
   p_requester_id VARCHAR(36)
@@ -245,25 +230,16 @@ BEGIN
     RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
   END IF;
 
-  IF v_request.dispute_deadline IS NULL
-     OR (extract(epoch from now()) * 1000) > v_request.dispute_deadline THEN
-    RAISE EXCEPTION 'Review window has closed. Ahmed will be paid automatically shortly.';
-  END IF;
-
   SELECT * INTO v_card FROM cards WHERE id = v_request.card_id;
 
-  -- Pay Ahmed: what he actually spent at checkout + his incentive fee
   UPDATE users
   SET wallet_balance = wallet_balance + (v_request.actual_amount_paid + v_request.incentive_fee)
   WHERE id = v_request.card_holder_id;
 
-  -- Collect platform fee
   UPDATE platform_account
   SET wallet_balance = wallet_balance + v_request.platform_fee
   WHERE id = 1;
 
-  -- Refund Sara her 70% of saving: order_amount − actual_amount_paid − incentive_fee − platform_fee
-  -- e.g. order 10000, 20% discount → saving 2000 → Ahmed 500, platform 100, Sara gets back 1400
   UPDATE users
   SET wallet_balance = wallet_balance + (v_request.order_amount - v_request.actual_amount_paid - v_request.incentive_fee - v_request.platform_fee)
   WHERE id = v_request.requester_id;
@@ -297,8 +273,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Sara rejects within dispute_deadline after screenshot is submitted
--- Row locked with FOR UPDATE — competes with confirm_tracking and cron Case 2
+-- Sara rejects the screenshot/amount — full refund
+-- Row locked with FOR UPDATE — competes with confirm_tracking
 CREATE OR REPLACE FUNCTION raise_dispute(
   p_request_id   VARCHAR(36),
   p_requester_id VARCHAR(36),
@@ -323,14 +299,8 @@ BEGIN
     RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
   END IF;
 
-  IF v_request.dispute_deadline IS NULL
-     OR (extract(epoch from now()) * 1000) > v_request.dispute_deadline THEN
-    RAISE EXCEPTION 'Dispute window has closed. Payment will be released automatically shortly.';
-  END IF;
-
   SELECT * INTO v_card FROM cards WHERE id = v_request.card_id;
 
-  -- Refund Sara immediately
   UPDATE users
   SET wallet_balance = wallet_balance + v_request.order_amount
   WHERE id = v_request.requester_id;
@@ -366,7 +336,6 @@ $$ LANGUAGE plpgsql;
 
 
 -- Sara's history of all finalised orders
--- Reads from transactions table — request rows are deleted after finalisation
 CREATE OR REPLACE FUNCTION get_transaction_history_requester(
   p_requester_id VARCHAR(36)
 ) RETURNS JSON AS $$

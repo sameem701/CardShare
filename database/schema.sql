@@ -75,10 +75,18 @@ CREATE TABLE IF NOT EXISTS security_answer_lockout (
 );
 
 
+/* ── SESSIONS ────────────────────────────────────────────────── */
+-- One active login session per user; id goes in access JWT as session_id
+-- Lifetime tied to refresh (revoked together) — no expires_at column
+CREATE TABLE IF NOT EXISTS sessions (
+  id      VARCHAR(36) PRIMARY KEY,
+  user_id VARCHAR(36) NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE
+);
+
 /* ── REFRESH TOKENS ─────────────────────────────────────────── */
 -- Opaque refresh tokens (SHA-256 hash stored — plain token never persisted)
 -- One active refresh per user (one-device policy); rotated on each /auth/refresh
--- Revoked via revoke_refresh_tokens on logout or bind_device (new phone OTP)
+-- Revoked via revoke_refresh_tokens on logout or bind_device (new phone OTP); sessions cleared too
 CREATE TABLE IF NOT EXISTS refresh_tokens (
   id          VARCHAR(36) PRIMARY KEY,
   user_id     VARCHAR(36) NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
@@ -135,9 +143,7 @@ CREATE TABLE IF NOT EXISTS requests (
   incentive_fee        INT,
   screenshot_url       VARCHAR(200),
   actual_amount_paid   INT,
-  dispute_deadline     BIGINT,  -- set at submit_tracking: Sara confirm/dispute window ends here (30 min)
   rq_status            VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (rq_status IN ('pending', 'payment_pending', 'escrow_locked', 'tracking_submitted')),
-  expires_at           BIGINT NOT NULL,  -- repurposed per phase: pending / payment_pending / escrow_locked deadlines
   created_at           BIGINT NOT NULL,
   updated_at           BIGINT NOT NULL
 );
@@ -147,9 +153,9 @@ CREATE TABLE IF NOT EXISTS requests (
 -- Self-contained snapshot — no FK back to requests (request row is deleted at this point)
 -- txn_status values:
 --   completed → order fulfilled, Ahmed paid, Sara refunded the difference
---   cancelled → Ahmed cancelled after accepting (from escrow_locked), Sara refunded in full
---   refunded  → Ahmed went silent for 30 mins, auto job refunded Sara in full
---   disputed  → Sara rejected within 15 min window, Sara refunded in full
+--   cancelled → Ahmed cancelled from escrow_locked, Sara refunded in full
+--   disputed  → Sara rejected screenshot/amount, Sara refunded in full
+--   refunded  → legacy rows only (old auto-refund cron); no longer written
 CREATE TABLE IF NOT EXISTS transactions (
   id                   VARCHAR(36) PRIMARY KEY,
   requester_id         VARCHAR(36) NOT NULL REFERENCES users(id),
@@ -206,14 +212,19 @@ CREATE INDEX IF NOT EXISTS idx_circle_friend       ON circle(friend_id);
 CREATE INDEX IF NOT EXISTS idx_requests_requester  ON requests(requester_id);
 CREATE INDEX IF NOT EXISTS idx_requests_holder     ON requests(card_holder_id);
 CREATE INDEX IF NOT EXISTS idx_requests_status     ON requests(rq_status);
-CREATE INDEX IF NOT EXISTS idx_requests_status_expires
-  ON requests (rq_status, expires_at);
-CREATE INDEX IF NOT EXISTS idx_requests_dispute_deadline
-  ON requests (dispute_deadline)
-  WHERE rq_status = 'tracking_submitted';
 CREATE INDEX IF NOT EXISTS idx_txn_requester       ON transactions(requester_id);
 CREATE INDEX IF NOT EXISTS idx_txn_holder          ON transactions(card_holder_id);
 CREATE INDEX IF NOT EXISTS idx_chat_request        ON chat_messages(request_id);
+
+
+/* ── MIGRATIONS (trust-circle: no order timers) ─────────────── */
+ALTER TABLE requests DROP COLUMN IF EXISTS dispute_deadline;
+ALTER TABLE requests DROP COLUMN IF EXISTS expires_at;
+ALTER TABLE requests DROP COLUMN IF EXISTS total_paid;
+DROP INDEX IF EXISTS idx_requests_status_expires;
+DROP INDEX IF EXISTS idx_requests_dispute_deadline;
+DROP PROCEDURE IF EXISTS auto_expire_requests();
+DROP PROCEDURE IF EXISTS auto_release_escrow();
 
 
 /* ─────────────────────────────────────────────────────────────
@@ -225,8 +236,9 @@ CREATE INDEX IF NOT EXISTS idx_chat_request        ON chat_messages(request_id);
          PIN limits: 4 fails/round → pin_phone_lockout; success deletes that row
          Forgot PIN (known device): security Q → pin_reset_grants → new PIN
          Security answer: 3 fails → security_answer_lockout permanent
-         → backend issues access JWT (~15 min) + store_refresh_token (~30 days)
-         → validate_refresh_token / rotate_refresh_token on /auth/refresh
+         → backend issues access JWT (~5 min) + create_session + store_refresh_token (~30 days)
+         → auth middleware: session row + X-Device-Id vs users.device_id
+         → validate_refresh_token / rotate_refresh_token on /auth/refresh (same session_id)
    ───────────────────────────────────────────────────────────── */
 
 -- Internal helper — creates user row on first OTP verification
@@ -325,20 +337,97 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Explicit logout: revoke refresh + unbind device (next /auth/status → new_device)
-CREATE OR REPLACE PROCEDURE logout_user(
+-- Replaces any existing session for this user (one active session per user)
+CREATE OR REPLACE FUNCTION create_session(
   p_user_id VARCHAR(36)
-) AS $$
+) RETURNS JSON AS $$
+DECLARE
+  v_session_id VARCHAR(36);
 BEGIN
-  CALL revoke_refresh_tokens(p_user_id);
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id = p_user_id) THEN
+    RAISE EXCEPTION 'User not found.';
+  END IF;
 
-  UPDATE users
-  SET device_id = NULL
-  WHERE id = p_user_id;
+  DELETE FROM sessions WHERE user_id = p_user_id;
+
+  v_session_id := uuid_generate_v4()::varchar;
+
+  INSERT INTO sessions (id, user_id)
+  VALUES (v_session_id, p_user_id);
+
+  RETURN json_build_object('session_id', v_session_id);
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Session row must exist; device_id checked against users.device_id (not stored on sessions)
+CREATE OR REPLACE FUNCTION validate_session(
+  p_session_id VARCHAR(36),
+  p_user_id    VARCHAR(36),
+  p_device_id  VARCHAR(200)
+) RETURNS JSON AS $$
+DECLARE
+  v_session RECORD;
+  v_user    RECORD;
+BEGIN
+  IF p_device_id IS NULL OR p_device_id = '' THEN
+    RAISE EXCEPTION 'device_id is required.';
+  END IF;
+
+  SELECT * INTO v_session FROM sessions
+  WHERE id = p_session_id AND user_id = p_user_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Session revoked. Please log in again.';
+  END IF;
+
+  SELECT * INTO v_user FROM users WHERE id = p_user_id;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'User not found.';
   END IF;
+
+  IF v_user.device_id IS NULL OR v_user.device_id != p_device_id THEN
+    RAISE EXCEPTION 'Unrecognised device. Please log in again.';
+  END IF;
+
+  RETURN json_build_object(
+    'session_id', v_session.id,
+    'user_id',    v_session.user_id
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+
+CREATE OR REPLACE PROCEDURE revoke_session(
+  p_session_id VARCHAR(36)
+) AS $$
+BEGIN
+  DELETE FROM sessions WHERE id = p_session_id;
+END;
+$$ LANGUAGE plpgsql;
+
+
+CREATE OR REPLACE PROCEDURE revoke_user_sessions(
+  p_user_id VARCHAR(36)
+) AS $$
+BEGIN
+  DELETE FROM sessions WHERE user_id = p_user_id;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Explicit logout: revoke refresh + delete session(s); device binding kept (next open → PIN)
+CREATE OR REPLACE PROCEDURE logout_user(
+  p_user_id VARCHAR(36)
+) AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id = p_user_id) THEN
+    RAISE EXCEPTION 'User not found.';
+  END IF;
+
+  CALL revoke_user_sessions(p_user_id);
+  CALL revoke_refresh_tokens(p_user_id);
 END;
 $$ LANGUAGE plpgsql;
 
@@ -419,8 +508,14 @@ BEGIN
     RAISE EXCEPTION 'Session revoked. Please log in again.';
   END IF;
 
+  IF NOT EXISTS (SELECT 1 FROM sessions WHERE user_id = v_row.user_id) THEN
+    DELETE FROM refresh_tokens WHERE user_id = v_row.user_id;
+    RAISE EXCEPTION 'Session revoked. Please log in again.';
+  END IF;
+
   RETURN json_build_object(
     'user_id',        v_row.user_id,
+    'session_id',     (SELECT id FROM sessions WHERE user_id = v_row.user_id),
     'device_id',      v_row.device_id,
     'phone',          v_row.phone,
     'display_name',   v_row.display_name,
@@ -451,6 +546,7 @@ BEGIN
   RETURN json_build_object(
     'expires_at',     v_store->'expires_at',
     'user_id',        v_valid->'user_id',
+    'session_id',     v_valid->'session_id',
     'phone',          v_valid->'phone',
     'display_name',   v_valid->'display_name',
     'wallet_balance', v_valid->'wallet_balance',
@@ -486,6 +582,7 @@ BEGIN
   SET device_id = p_device_id
   WHERE id = p_user_id;
 
+  CALL revoke_user_sessions(p_user_id);
   -- Old phone refresh tokens must not renew access after a new device OTP login
   CALL revoke_refresh_tokens(p_user_id);
 
@@ -649,6 +746,9 @@ BEGIN
         WHERE user_id = v_user.id
         AND device_id = p_device_id
         AND expires_at > (extract(epoch from now()) * 1000)
+      ),
+      'has_active_session', EXISTS (
+        SELECT 1 FROM sessions WHERE user_id = v_user.id
       )
     );
   END IF;
@@ -1044,6 +1144,7 @@ BEGIN
   DELETE FROM pin_reset_grants WHERE phone = p_phone;
   DELETE FROM pin_phone_lockout WHERE phone = p_phone;
 
+  CALL revoke_user_sessions(v_user.id);
   CALL revoke_refresh_tokens(v_user.id);
 END;
 $$ LANGUAGE plpgsql;
@@ -1415,11 +1516,11 @@ $$ LANGUAGE plpgsql;
 
 
 /* ─────────────────────────────────────────────────────────────
-   SCHEDULED JOBS
-   Called by the backend on a regular interval (e.g. every minute)
+   SCHEDULED JOBS (auth housekeeping only — no order timers)
+   purge_expired_refresh_tokens optional; not wired in backend yet
    ───────────────────────────────────────────────────────────── */
 
--- Housekeeping — expired refresh token rows (optional cron alongside auto_expire_requests)
+-- Housekeeping — expired refresh token rows (optional; not wired in backend yet)
 CREATE OR REPLACE PROCEDURE purge_expired_refresh_tokens() AS $$
 BEGIN
   DELETE FROM refresh_tokens
@@ -1428,112 +1529,3 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Deletes timed-out requests — no money involved, no transaction row created
--- FOR UPDATE per row — pending competes with accept/decline/cancel; payment_pending with confirm/cancel
-CREATE OR REPLACE PROCEDURE auto_expire_requests() AS $$
-DECLARE
-  v_req RECORD;
-BEGIN
-  FOR v_req IN
-    SELECT id FROM requests
-    WHERE rq_status IN ('pending', 'payment_pending')
-    AND expires_at < (extract(epoch from now()) * 1000)
-    FOR UPDATE
-  LOOP
-    DELETE FROM requests WHERE id = v_req.id;
-  END LOOP;
-END;
-$$ LANGUAGE plpgsql;
-
-
--- Case 1: escrow_locked for 30 mins — Ahmed never submitted tracking — refund Sara full order_amount
--- Case 2: tracking_submitted past dispute_deadline — Sara did not confirm or dispute:
---           actual_saving = order_amount − actual_amount_paid (fees set at submit_tracking)
---           Ahmed receives  actual_amount_paid + incentive_fee (25% of actual_saving)
---           Platform takes  platform_fee (5% of actual_saving)
---           Sara gets back  order_amount − actual_amount_paid − incentive_fee − platform_fee (70% of actual_saving)
--- Both cases: INSERT sealed transaction record, DELETE request row
-CREATE OR REPLACE PROCEDURE auto_release_escrow() AS $$
-DECLARE
-  v_req RECORD;
-BEGIN
-  -- Case 1: Refund Sara — Ahmed never submitted tracking within 30 mins
-  -- FOR UPDATE OF r — only one of submit_tracking / cancel_request_holder / this loop can settle each row
-  FOR v_req IN
-    SELECT r.*, c.bank_name, c.card_type, c.card_tier
-    FROM requests r
-    JOIN cards c ON c.id = r.card_id
-    WHERE r.rq_status = 'escrow_locked'
-    AND r.order_amount IS NOT NULL
-    AND (extract(epoch from now()) * 1000) > r.expires_at
-    FOR UPDATE OF r
-  LOOP
-    UPDATE users
-    SET wallet_balance = wallet_balance + v_req.order_amount
-    WHERE id = v_req.requester_id;
-
-    INSERT INTO transactions (
-      id, requester_id, card_holder_id, merchant, product_url,
-      delivery_address, order_amount, discount_percentage, note,
-      bank_name, card_type, card_tier,
-      platform_fee, incentive_fee, actual_amount_paid,
-      txn_status, screenshot_url, dispute_reason,
-      created_at, updated_at
-    ) VALUES (
-      uuid_generate_v4()::varchar, v_req.requester_id, v_req.card_holder_id,
-      v_req.merchant, v_req.product_url, v_req.delivery_address,
-      v_req.order_amount, v_req.discount_percentage, v_req.note,
-      v_req.bank_name, v_req.card_type, v_req.card_tier,
-      v_req.platform_fee, v_req.incentive_fee, NULL,
-      'refunded', NULL, NULL,
-      extract(epoch from now()) * 1000, extract(epoch from now()) * 1000
-    );
-
-    DELETE FROM requests WHERE id = v_req.id;
-  END LOOP;
-
-  -- Case 2: Pay Ahmed — dispute_deadline passed, Sara did not confirm or dispute
-  -- FOR UPDATE OF r — only one of confirm_tracking / raise_dispute / this loop can settle each row
-  FOR v_req IN
-    SELECT r.*, c.bank_name, c.card_type, c.card_tier
-    FROM requests r
-    JOIN cards c ON c.id = r.card_id
-    WHERE r.rq_status = 'tracking_submitted'
-    AND r.actual_amount_paid IS NOT NULL
-    AND r.dispute_deadline IS NOT NULL
-    AND (extract(epoch from now()) * 1000) > r.dispute_deadline
-    FOR UPDATE OF r
-  LOOP
-    UPDATE users
-    SET wallet_balance = wallet_balance + (v_req.actual_amount_paid + v_req.incentive_fee)
-    WHERE id = v_req.card_holder_id;
-
-    UPDATE platform_account
-    SET wallet_balance = wallet_balance + v_req.platform_fee
-    WHERE id = 1;
-
-    UPDATE users
-    SET wallet_balance = wallet_balance + (v_req.order_amount - v_req.actual_amount_paid - v_req.incentive_fee - v_req.platform_fee)
-    WHERE id = v_req.requester_id;
-
-    INSERT INTO transactions (
-      id, requester_id, card_holder_id, merchant, product_url,
-      delivery_address, order_amount, discount_percentage, note,
-      bank_name, card_type, card_tier,
-      platform_fee, incentive_fee, actual_amount_paid,
-      txn_status, screenshot_url, dispute_reason,
-      created_at, updated_at
-    ) VALUES (
-      uuid_generate_v4()::varchar, v_req.requester_id, v_req.card_holder_id,
-      v_req.merchant, v_req.product_url, v_req.delivery_address,
-      v_req.order_amount, v_req.discount_percentage, v_req.note,
-      v_req.bank_name, v_req.card_type, v_req.card_tier,
-      v_req.platform_fee, v_req.incentive_fee, v_req.actual_amount_paid,
-      'completed', v_req.screenshot_url, NULL,
-      extract(epoch from now()) * 1000, extract(epoch from now()) * 1000
-    );
-
-    DELETE FROM requests WHERE id = v_req.id;
-  END LOOP;
-END;
-$$ LANGUAGE plpgsql;
