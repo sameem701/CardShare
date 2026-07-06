@@ -3,15 +3,14 @@
 /* ─────────────────────────────────────────────────────────────
    CARD HOLDER (Ahmed)
    Flow: get_incoming_requests → accept_request / decline_request
-         → [payment_pending — awaiting Sara's payment] → get_active_orders_holder → submit_tracking
-         → get_request_holder (view detail at any point)
-         → get_transaction_history_holder (view past completed orders)
-   No order timers — trust circle; parties coordinate at their own pace.
+         → [payment_pending — PSP pay] → get_active_orders_holder → submit_tracking
+         → get_request_holder → get_transaction_history_holder
+   accept_request: payout verified; 24h cooldown only after re-link (payout_relinked_at)
+   Fees on actual saving: 5% platform, 15% holder incentive
+   cancel/dispute refunds via PSP webhook before SQL seals transaction
    ───────────────────────────────────────────────────────────── */
 
 
--- Ahmed sees all pending requests sent to him
--- Delivery address not included — only visible once escrow locks
 CREATE OR REPLACE FUNCTION get_incoming_requests(
   p_holder_id VARCHAR(36)
 ) RETURNS JSON AS $$
@@ -45,16 +44,33 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Ahmed accepts Sara's request
--- Row locked with FOR UPDATE — competes with decline_request and cancel_request
--- Fees are NOT set here — calculated at submit_tracking from actual_amount_paid
+-- Ahmed accepts — payout verified; 24h cooldown only after changing payout
 CREATE OR REPLACE FUNCTION accept_request(
   p_request_id VARCHAR(36),
   p_holder_id  VARCHAR(36)
 ) RETURNS JSON AS $$
 DECLARE
   v_request RECORD;
+  v_holder  RECORD;
+  v_now     BIGINT;
 BEGIN
+  SELECT * INTO v_holder FROM users WHERE id = p_holder_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'User not found.';
+  END IF;
+
+  IF v_holder.payout_status != 'verified' THEN
+    RAISE EXCEPTION 'Link your payout account before accepting requests.';
+  END IF;
+
+  v_now := extract(epoch from now()) * 1000;
+
+  IF v_holder.payout_relinked_at IS NOT NULL
+     AND v_now < v_holder.payout_relinked_at + 86400000 THEN
+    RAISE EXCEPTION 'You can accept requests 24 hours after changing your payout account.';
+  END IF;
+
   SELECT * INTO v_request FROM requests
   WHERE id = p_request_id
   AND card_holder_id = p_holder_id
@@ -67,7 +83,7 @@ BEGIN
 
   UPDATE requests
   SET rq_status  = 'payment_pending',
-      updated_at = extract(epoch from now()) * 1000
+      updated_at = v_now
   WHERE id = p_request_id;
 
   RETURN (
@@ -82,8 +98,6 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Ahmed declines Sara's request
--- Row locked with FOR UPDATE — competes with accept_request and cancel_request
 CREATE OR REPLACE FUNCTION decline_request(
   p_request_id VARCHAR(36),
   p_holder_id  VARCHAR(36)
@@ -113,9 +127,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Ahmed cancels an order he already accepted
--- Only allowed from escrow_locked — once tracking is submitted Ahmed has committed
--- Row locked with FOR UPDATE — competes with submit_tracking
+-- Ahmed cancels from escrow_locked — call after PSP refund webhook
 CREATE OR REPLACE FUNCTION cancel_request_holder(
   p_request_id VARCHAR(36),
   p_holder_id  VARCHAR(36)
@@ -124,6 +136,7 @@ DECLARE
   v_request RECORD;
   v_card    RECORD;
   v_txn_id  VARCHAR(36);
+  v_now     BIGINT;
 BEGIN
   SELECT * INTO v_request FROM requests
   WHERE id = p_request_id
@@ -137,11 +150,7 @@ BEGIN
 
   SELECT * INTO v_card FROM cards WHERE id = v_request.card_id;
 
-  -- Refund Sara in full — Ahmed paid nothing so nothing is owed to him
-  UPDATE users
-  SET wallet_balance = wallet_balance + v_request.order_amount
-  WHERE id = v_request.requester_id;
-
+  v_now    := extract(epoch from now()) * 1000;
   v_txn_id := uuid_generate_v4()::varchar;
 
   INSERT INTO transactions (
@@ -150,6 +159,7 @@ BEGIN
     bank_name, card_type, card_tier,
     platform_fee, incentive_fee, actual_amount_paid,
     txn_status, screenshot_url, dispute_reason,
+    psp_hold_id, psp_paid_at, psp_settled_at,
     created_at, updated_at
   ) VALUES (
     v_txn_id, v_request.requester_id, v_request.card_holder_id,
@@ -158,7 +168,8 @@ BEGIN
     v_card.bank_name, v_card.card_type, v_card.card_tier,
     COALESCE(v_request.platform_fee, 0), COALESCE(v_request.incentive_fee, 0), NULL,
     'cancelled', NULL, NULL,
-    extract(epoch from now()) * 1000, extract(epoch from now()) * 1000
+    v_request.psp_hold_id, v_request.psp_paid_at, v_now,
+    v_now, v_now
   );
 
   DELETE FROM requests WHERE id = p_request_id;
@@ -172,9 +183,6 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Ahmed submits screenshot + checkout amount after placing the order
--- Fees calculated here from actual_saving = order_amount − actual_amount_paid
--- Row locked with FOR UPDATE — competes with cancel_request_holder
 CREATE OR REPLACE FUNCTION submit_tracking(
   p_request_id         VARCHAR(36),
   p_holder_id          VARCHAR(36),
@@ -207,7 +215,7 @@ BEGIN
 
   v_actual_saving   := v_request.order_amount - p_actual_amount_paid;
   v_platform_fee    := ROUND(v_actual_saving * 0.05);
-  v_incentive_fee   := ROUND(v_actual_saving * 0.25);
+  v_incentive_fee   := ROUND(v_actual_saving * 0.15);
 
   UPDATE requests
   SET screenshot_url     = p_screenshot_url,
@@ -231,10 +239,6 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Ahmed sees orders he has already accepted
--- payment_pending    = awaiting Sara's payment confirmation
--- escrow_locked      = Ahmed must submit screenshot when ready
--- tracking_submitted = tracking submitted, awaiting Sara's confirm or dispute
 CREATE OR REPLACE FUNCTION get_active_orders_holder(
   p_holder_id VARCHAR(36)
 ) RETURNS JSON AS $$
@@ -248,7 +252,11 @@ BEGIN
         req.product_url,
         req.order_amount,
         req.discount_percentage,
-        req.delivery_address,
+        CASE
+          WHEN req.rq_status IN ('escrow_locked', 'tracking_submitted')
+          THEN req.delivery_address
+          ELSE NULL
+        END AS delivery_address,
         req.note,
         req.rq_status,
         req.platform_fee,
@@ -273,20 +281,16 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Full detail view for Ahmed on any active request
--- Delivery address hidden until escrow is locked
 CREATE OR REPLACE FUNCTION get_request_holder(
   p_request_id VARCHAR(36),
   p_holder_id  VARCHAR(36)
 ) RETURNS JSON AS $$
-DECLARE
-  v_request RECORD;
 BEGIN
-  SELECT * INTO v_request FROM requests
-  WHERE id = p_request_id
-  AND card_holder_id = p_holder_id;
-
-  IF NOT FOUND THEN
+  IF NOT EXISTS (
+    SELECT 1 FROM requests
+    WHERE id = p_request_id
+    AND card_holder_id = p_holder_id
+  ) THEN
     RAISE EXCEPTION 'Request not found or access denied.';
   END IF;
 
@@ -312,7 +316,7 @@ BEGIN
         c.card_type,
         c.card_tier,
         CASE
-          WHEN req.rq_status IN ('payment_pending', 'escrow_locked', 'tracking_submitted')
+          WHEN req.rq_status IN ('escrow_locked', 'tracking_submitted')
           THEN req.delivery_address
           ELSE NULL
         END AS delivery_address
@@ -326,7 +330,6 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Ahmed's history of all finalised orders
 CREATE OR REPLACE FUNCTION get_transaction_history_holder(
   p_holder_id VARCHAR(36)
 ) RETURNS JSON AS $$
@@ -349,6 +352,9 @@ BEGIN
         txn.txn_status,
         txn.screenshot_url,
         txn.dispute_reason,
+        txn.psp_hold_id,
+        txn.psp_paid_at,
+        txn.psp_settled_at,
         txn.created_at,
         txn.updated_at,
         u.display_name AS requester_name

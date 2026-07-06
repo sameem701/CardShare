@@ -1,7 +1,8 @@
 -- database/schema.sql
 --
 -- Money convention: all amounts are whole PKR (Pakistani Rupees), stored as INT.
--- e.g. wallet_balance = 5000 means Rs 5,000. No paisa / fractional rupees in MVP.
+-- User counters total_saved / total_earned are lifetime display stats only.
+-- Real money moves via PSP — not stored as wallet_balance.
 
 /* ── EXTENSIONS ────────────────────────────────────────────── */
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -13,7 +14,13 @@ CREATE TABLE IF NOT EXISTS users (
   phone                VARCHAR(20) UNIQUE NOT NULL,
   display_name         VARCHAR(100),
   pin_hash             TEXT,
-  wallet_balance       INT NOT NULL DEFAULT 0,
+  total_saved          INT NOT NULL DEFAULT 0,
+  total_earned         INT NOT NULL DEFAULT 0,
+  psp_payee_id         VARCHAR(200),
+  payout_status        VARCHAR(20) NOT NULL DEFAULT 'none'
+                         CHECK (payout_status IN ('none', 'pending', 'verified', 'failed')),
+  payout_linked_at     BIGINT,      -- first/last successful PSP payout link
+  payout_relinked_at   BIGINT,      -- set only on re-link; 24h accept cooldown from this
   security_question    TEXT,
   security_answer_hash TEXT,
   device_id            VARCHAR(200),
@@ -30,11 +37,6 @@ CREATE TABLE IF NOT EXISTS otps (
   attempts     INT NOT NULL DEFAULT 0,
   resend_count INT NOT NULL DEFAULT 0
 );
-
-ALTER TABLE otps ADD COLUMN IF NOT EXISTS resend_count INT NOT NULL DEFAULT 0;
-
-ALTER TABLE users ADD COLUMN IF NOT EXISTS security_question TEXT;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS security_answer_hash TEXT;
 
 /* ── OTP PHONE LOCKOUT ──────────────────────────────────────── */
 -- Phone-wide OTP ban after 6 failed verifies in a round.
@@ -120,10 +122,11 @@ CREATE TABLE IF NOT EXISTS circle (
 -- Live state of an order — row exists until a terminal transaction is created
 -- Columns marked "set at accept_request" are NULL until Ahmed accepts
 -- Financial columns on requests:
---   order amount         —  Sara locks this at confirm_payment
+--   order amount         —  set at create_request
 --   platform_fee       — set at submit_tracking (5% of actual_saving)
---   incentive_fee      — set at submit_tracking (25% of actual_saving)
+--   incentive_fee      — set at submit_tracking (15% of actual_saving)
 --   actual_amount_paid — set at submit_tracking (Ahmed's checkout total)
+--   psp_hold_id        — set at escrow_locked (PSP escrow reference)
 -- 'completed' and 'disputed' are not in rq_status — those states immediately
 -- create a transaction row and delete this request row
 CREATE TABLE IF NOT EXISTS requests (
@@ -144,6 +147,8 @@ CREATE TABLE IF NOT EXISTS requests (
   screenshot_url       VARCHAR(200),
   actual_amount_paid   INT,
   rq_status            VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (rq_status IN ('pending', 'payment_pending', 'escrow_locked', 'tracking_submitted')),
+  psp_hold_id          VARCHAR(200),
+  psp_paid_at          BIGINT,
   created_at           BIGINT NOT NULL,
   updated_at           BIGINT NOT NULL
 );
@@ -175,22 +180,12 @@ CREATE TABLE IF NOT EXISTS transactions (
   txn_status           VARCHAR(20) NOT NULL CHECK (txn_status IN ('completed', 'cancelled', 'refunded', 'disputed')),
   screenshot_url          VARCHAR(200),
   dispute_reason       TEXT,
+  psp_hold_id          VARCHAR(200),
+  psp_paid_at          BIGINT,
+  psp_settled_at       BIGINT,
   created_at           BIGINT NOT NULL,
   updated_at           BIGINT NOT NULL
 );
-
-/* ── PLATFORM ACCOUNT ───────────────────────────────────────── */
--- Single-row table that holds the platform's collected fees
--- id is always 1 — there is only ever one row
-CREATE TABLE IF NOT EXISTS platform_account (
-  id             INT PRIMARY KEY DEFAULT 1,
-  wallet_balance INT NOT NULL DEFAULT 0
-);
-
--- Seed the single platform account row on first run
-INSERT INTO platform_account (id, wallet_balance)
-VALUES (1, 0)
-ON CONFLICT (id) DO NOTHING;
 
 /* ── CHAT ───────────────────────────────────────────────────── */
 CREATE TABLE IF NOT EXISTS chat_messages (
@@ -211,20 +206,11 @@ CREATE INDEX IF NOT EXISTS idx_circle_user         ON circle(user_id);
 CREATE INDEX IF NOT EXISTS idx_circle_friend       ON circle(friend_id);
 CREATE INDEX IF NOT EXISTS idx_requests_requester  ON requests(requester_id);
 CREATE INDEX IF NOT EXISTS idx_requests_holder     ON requests(card_holder_id);
+CREATE INDEX IF NOT EXISTS idx_requests_requester_holder ON requests(requester_id, card_holder_id);
 CREATE INDEX IF NOT EXISTS idx_requests_status     ON requests(rq_status);
 CREATE INDEX IF NOT EXISTS idx_txn_requester       ON transactions(requester_id);
 CREATE INDEX IF NOT EXISTS idx_txn_holder          ON transactions(card_holder_id);
 CREATE INDEX IF NOT EXISTS idx_chat_request        ON chat_messages(request_id);
-
-
-/* ── MIGRATIONS (trust-circle: no order timers) ─────────────── */
-ALTER TABLE requests DROP COLUMN IF EXISTS dispute_deadline;
-ALTER TABLE requests DROP COLUMN IF EXISTS expires_at;
-ALTER TABLE requests DROP COLUMN IF EXISTS total_paid;
-DROP INDEX IF EXISTS idx_requests_status_expires;
-DROP INDEX IF EXISTS idx_requests_dispute_deadline;
-DROP PROCEDURE IF EXISTS auto_expire_requests();
-DROP PROCEDURE IF EXISTS auto_release_escrow();
 
 
 /* ─────────────────────────────────────────────────────────────
@@ -260,7 +246,7 @@ BEGIN
   RETURN (
     SELECT row_to_json(u)
     FROM (
-      SELECT id, phone, display_name, wallet_balance, is_onboarded
+      SELECT id, phone, display_name, total_saved, total_earned, payout_status, is_onboarded
       FROM users WHERE id = v_user_id
     ) u
   );
@@ -432,9 +418,6 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Legacy — drop if upgrading: DROP PROCEDURE IF EXISTS revoke_refresh_token(TEXT);
-
-
 -- Called by backend after OTP/PIN login — replaces any existing row for this user
 CREATE OR REPLACE FUNCTION store_refresh_token(
   p_user_id    VARCHAR(36),
@@ -482,7 +465,7 @@ DECLARE
   v_row RECORD;
 BEGIN
   SELECT rt.user_id, rt.device_id, rt.expires_at,
-         u.phone, u.display_name, u.wallet_balance, u.is_onboarded
+         u.phone, u.display_name, u.total_saved, u.total_earned, u.payout_status, u.is_onboarded
   INTO v_row
   FROM refresh_tokens rt
   JOIN users u ON u.id = rt.user_id
@@ -519,7 +502,9 @@ BEGIN
     'device_id',      v_row.device_id,
     'phone',          v_row.phone,
     'display_name',   v_row.display_name,
-    'wallet_balance', v_row.wallet_balance,
+    'total_saved',    v_row.total_saved,
+    'total_earned',   v_row.total_earned,
+    'payout_status',  v_row.payout_status,
     'is_onboarded',   v_row.is_onboarded
   );
 END;
@@ -549,7 +534,9 @@ BEGIN
     'session_id',     v_valid->'session_id',
     'phone',          v_valid->'phone',
     'display_name',   v_valid->'display_name',
-    'wallet_balance', v_valid->'wallet_balance',
+    'total_saved',    v_valid->'total_saved',
+    'total_earned',   v_valid->'total_earned',
+    'payout_status',  v_valid->'payout_status',
     'is_onboarded',   v_valid->'is_onboarded',
     'device_id',      v_valid->'device_id'
   );
@@ -706,7 +693,9 @@ BEGIN
       'id',             id,
       'phone',          phone,
       'display_name',   display_name,
-      'wallet_balance', wallet_balance,
+      'total_saved',    total_saved,
+      'total_earned',   total_earned,
+      'payout_status',  payout_status,
       'is_onboarded',   is_onboarded,
       'old_device_id',  v_old_device_id
     )
@@ -994,7 +983,7 @@ BEGIN
   RETURN (
     SELECT row_to_json(u)
     FROM (
-      SELECT id, phone, display_name, wallet_balance, is_onboarded
+      SELECT id, phone, display_name, total_saved, total_earned, payout_status, is_onboarded
       FROM users WHERE id = v_user.id
     ) u
   );
@@ -1154,7 +1143,7 @@ $$ LANGUAGE plpgsql;
    PROFILE
    ───────────────────────────────────────────────────────────── */
 
--- Returns user's own profile including wallet balance
+-- Returns user's own profile including saved/earned counters and payout status
 CREATE OR REPLACE FUNCTION get_profile(
   p_user_id VARCHAR(36)
 ) RETURNS JSON AS $$
@@ -1162,7 +1151,7 @@ BEGIN
   RETURN (
     SELECT row_to_json(u)
     FROM (
-      SELECT id, phone, display_name, wallet_balance
+      SELECT id, phone, display_name, total_saved, total_earned, payout_status
       FROM users
       WHERE id = p_user_id
     ) u
@@ -1189,22 +1178,49 @@ $$ LANGUAGE plpgsql;
 
 
 /* ─────────────────────────────────────────────────────────────
-   WALLET
-   top_up_wallet must be called before create_request is possible
+   PSP — payout linking & escrow (called from backend webhooks)
+   Real money at PSP; DB stores references + saved/earned counters only.
    ───────────────────────────────────────────────────────────── */
 
--- Called by backend ONLY after payment gateway confirms the real-world transaction
-CREATE OR REPLACE PROCEDURE top_up_wallet(
-  p_user_id VARCHAR(36),
-  p_amount  INT
+-- PSP webhook: holder completed payout onboarding
+CREATE OR REPLACE PROCEDURE set_payout_verified(
+  p_user_id      VARCHAR(36),
+  p_psp_payee_id VARCHAR(200)
 ) AS $$
+DECLARE
+  v_had_linked BOOLEAN;
 BEGIN
-  IF p_amount <= 0 THEN
-    RAISE EXCEPTION 'Top-up amount must be greater than zero.';
+  IF p_psp_payee_id IS NULL OR TRIM(p_psp_payee_id) = '' THEN
+    RAISE EXCEPTION 'PSP payee id is required.';
+  END IF;
+
+  SELECT payout_linked_at IS NOT NULL INTO v_had_linked
+  FROM users WHERE id = p_user_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'User not found.';
   END IF;
 
   UPDATE users
-  SET wallet_balance = wallet_balance + p_amount
+  SET psp_payee_id       = p_psp_payee_id,
+      payout_status      = 'verified',
+      payout_linked_at   = extract(epoch from now()) * 1000,
+      payout_relinked_at = CASE
+        WHEN v_had_linked THEN extract(epoch from now()) * 1000
+        ELSE NULL
+      END
+  WHERE id = p_user_id;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- PSP webhook: holder payout verification failed
+CREATE OR REPLACE PROCEDURE set_payout_failed(
+  p_user_id VARCHAR(36)
+) AS $$
+BEGIN
+  UPDATE users
+  SET payout_status = 'failed'
   WHERE id = p_user_id;
 
   IF NOT FOUND THEN
@@ -1214,36 +1230,60 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Deducts from wallet first — backend then initiates the real bank transfer
--- If the bank transfer fails, backend is responsible for calling top_up_wallet to refund
-CREATE OR REPLACE FUNCTION withdraw_from_wallet(
-  p_user_id VARCHAR(36),
-  p_amount  INT
-) RETURNS JSON AS $$
-DECLARE
-  v_new_balance INT;
+-- Before re-link: mark pending until new PSP webhook confirms
+CREATE OR REPLACE PROCEDURE clear_payout(
+  p_user_id VARCHAR(36)
+) AS $$
 BEGIN
-  IF p_amount <= 0 THEN
-    RAISE EXCEPTION 'Withdrawal amount must be greater than zero.';
-  END IF;
-
-  IF (SELECT wallet_balance FROM users WHERE id = p_user_id) < p_amount THEN
-    RAISE EXCEPTION 'Insufficient wallet balance.';
-  END IF;
-
   UPDATE users
-  SET wallet_balance = wallet_balance - p_amount
-  WHERE id = p_user_id
-  RETURNING wallet_balance INTO v_new_balance;
+  SET psp_payee_id  = NULL,
+      payout_status = 'pending'
+  WHERE id = p_user_id;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'User not found.';
   END IF;
+END;
+$$ LANGUAGE plpgsql;
 
-  RETURN json_build_object(
-    'user_id',          p_user_id,
-    'amount_withdrawn', p_amount,
-    'new_balance',      v_new_balance
+
+-- PSP webhook: Sara paid — escrow locked (replaces fake-wallet confirm_payment)
+CREATE OR REPLACE FUNCTION lock_escrow(
+  p_request_id   VARCHAR(36),
+  p_requester_id VARCHAR(36),
+  p_psp_hold_id  VARCHAR(200)
+) RETURNS JSON AS $$
+DECLARE
+  v_request RECORD;
+BEGIN
+  IF p_psp_hold_id IS NULL OR TRIM(p_psp_hold_id) = '' THEN
+    RAISE EXCEPTION 'PSP hold id is required.';
+  END IF;
+
+  SELECT * INTO v_request FROM requests
+  WHERE id = p_request_id
+  AND requester_id = p_requester_id
+  AND rq_status = 'payment_pending'
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
+  END IF;
+
+  UPDATE requests
+  SET rq_status   = 'escrow_locked',
+      psp_hold_id = p_psp_hold_id,
+      psp_paid_at = extract(epoch from now()) * 1000,
+      updated_at  = extract(epoch from now()) * 1000
+  WHERE id = p_request_id;
+
+  RETURN (
+    SELECT row_to_json(r)
+    FROM (
+      SELECT id, merchant, order_amount, platform_fee, incentive_fee,
+             rq_status, psp_hold_id, updated_at
+      FROM requests WHERE id = p_request_id
+    ) r
   );
 END;
 $$ LANGUAGE plpgsql;
@@ -1274,9 +1314,17 @@ BEGIN
   RETURN (
     SELECT COALESCE(json_agg(c), '[]'::json)
     FROM (
-      SELECT id, bank_name, card_type, card_tier, allow_sharing, created_at
+      SELECT
+        cards.id,
+        cards.bank_name,
+        cards.card_type,
+        cards.card_tier,
+        cards.allow_sharing,
+        cards.created_at,
+        u.payout_status
       FROM cards
-      WHERE user_id = p_user_id
+      JOIN users u ON u.id = cards.user_id
+      WHERE cards.user_id = p_user_id
     ) c
   );
 END;
@@ -1430,7 +1478,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Returns only cards with allow_sharing = 1
+-- Returns only cards with allow_sharing = 1 AND holder payout verified
 -- Called by Sara when selecting which card to use for a request
 CREATE OR REPLACE FUNCTION get_circle_cards(
   p_user_id   VARCHAR(36),
@@ -1449,10 +1497,12 @@ BEGIN
   RETURN (
     SELECT COALESCE(json_agg(c), '[]'::json)
     FROM (
-      SELECT id, bank_name, card_type, card_tier
+      SELECT cards.id, cards.bank_name, cards.card_type, cards.card_tier
       FROM cards
-      WHERE user_id = p_friend_id
-      AND allow_sharing = 1
+      JOIN users u ON u.id = cards.user_id
+      WHERE cards.user_id = p_friend_id
+      AND cards.allow_sharing = 1
+      AND u.payout_status = 'verified'
     ) c
   );
 END;

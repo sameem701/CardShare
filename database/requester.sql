@@ -2,18 +2,19 @@
 
 /* ─────────────────────────────────────────────────────────────
    CARD REQUESTER (Sara)
-   Flow: create_request → cancel_request (pending or payment_pending, before Sara pays)
-         → [Ahmed accepts → payment_pending] → confirm_payment (Sara pays, escrow locks)
-         → get_request_requester (view current active purchase)
-         → confirm_tracking / raise_dispute (anytime after tracking submitted)
-         → get_transaction_history_requester (view past completed orders)
-   No order timers — trust circle; parties coordinate at their own pace.
+   Flow: create_request → cancel_request (pending or payment_pending)
+         → [Ahmed accepts → payment_pending] → PSP pay → lock_escrow (webhook)
+         → get_active_requests_requester (list) / get_request_requester (detail)
+         → confirm_tracking / raise_dispute (after PSP webhook — anytime after tracking)
+         → get_transaction_history_requester
+   Fees on actual saving: 5% platform, 15% holder incentive, 80% saved (requester).
+   One active request per friend pair. No create-time balance check.
+   All business rules enforced here — direct API calls included.
    ───────────────────────────────────────────────────────────── */
 
 
 -- Sara creates a request targeting one of Ahmed's shared cards
--- Requires accepted circle membership and card availability
--- Sara can have only one active request at a time across her entire circle
+-- Holder must be payout-verified (same rule as get_circle_cards)
 CREATE OR REPLACE FUNCTION create_request(
   p_requester_id        VARCHAR(36),
   p_card_holder_id      VARCHAR(36),
@@ -41,6 +42,14 @@ BEGIN
   END IF;
 
   IF NOT EXISTS (
+    SELECT 1 FROM users
+    WHERE id = p_card_holder_id
+    AND payout_status = 'verified'
+  ) THEN
+    RAISE EXCEPTION 'This card holder has not linked a payout account yet.';
+  END IF;
+
+  IF NOT EXISTS (
     SELECT 1 FROM cards
     WHERE id = p_card_id
     AND user_id = p_card_holder_id
@@ -52,20 +61,17 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM requests
     WHERE requester_id = p_requester_id
+    AND card_holder_id = p_card_holder_id
     AND rq_status IN ('pending', 'payment_pending', 'escrow_locked', 'tracking_submitted')
   ) THEN
-    RAISE EXCEPTION 'You already have an active request. Complete or cancel it before making a new one.';
-  END IF;
-
-  IF (SELECT wallet_balance FROM users WHERE id = p_requester_id) < p_order_amount THEN
-    RAISE EXCEPTION 'Insufficient wallet balance to cover order amount.';
+    RAISE EXCEPTION 'You already have an active request with this person.';
   END IF;
 
   v_request_id := uuid_generate_v4()::varchar;
 
   v_expected_saving   := ROUND(p_order_amount * (p_discount_percentage / 100.0));
   v_est_platform_fee  := ROUND(v_expected_saving * 0.05);
-  v_est_incentive_fee := ROUND(v_expected_saving * 0.25);
+  v_est_incentive_fee := ROUND(v_expected_saving * 0.15);
 
   INSERT INTO requests (
     id, requester_id, card_holder_id, card_id, merchant,
@@ -95,8 +101,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Sara cancels her own request before escrow locks
--- Allowed in pending or payment_pending — row locked with FOR UPDATE
+-- Sara cancels before escrow locks
 CREATE OR REPLACE FUNCTION cancel_request(
   p_request_id   VARCHAR(36),
   p_requester_id VARCHAR(36)
@@ -111,7 +116,7 @@ BEGIN
   FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Request not found, access denied or access denied.';
+    RAISE EXCEPTION 'Request not found or access denied.';
   END IF;
 
   DELETE FROM requests WHERE id = p_request_id;
@@ -128,59 +133,17 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Sara confirms payment after Ahmed accepts (pay-on-accept model)
--- Row locked with FOR UPDATE — competes with cancel_request
-CREATE OR REPLACE FUNCTION confirm_payment(
-  p_request_id   VARCHAR(36),
-  p_requester_id VARCHAR(36)
-) RETURNS JSON AS $$
-DECLARE
-  v_request RECORD;
-BEGIN
-  SELECT * INTO v_request FROM requests
-  WHERE id = p_request_id
-  AND requester_id = p_requester_id
-  AND rq_status = 'payment_pending'
-  FOR UPDATE;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
-  END IF;
-
-  IF (SELECT wallet_balance FROM users WHERE id = p_requester_id) < v_request.order_amount THEN
-    RAISE EXCEPTION 'Insufficient wallet balance.';
-  END IF;
-
-  UPDATE users
-  SET wallet_balance = wallet_balance - v_request.order_amount
-  WHERE id = p_requester_id;
-
-  UPDATE requests
-  SET rq_status  = 'escrow_locked',
-      updated_at = extract(epoch from now()) * 1000
-  WHERE id = p_request_id;
-
-  RETURN (
-    SELECT row_to_json(r)
-    FROM (
-      SELECT id, merchant, order_amount, platform_fee, incentive_fee, rq_status, updated_at
-      FROM requests WHERE id = p_request_id
-    ) r
-  );
-END;
-$$ LANGUAGE plpgsql;
-
-
--- Sara's current purchase (0 or 1 row)
-CREATE OR REPLACE FUNCTION get_request_requester(
+-- Sara's active purchases across her circle
+CREATE OR REPLACE FUNCTION get_active_requests_requester(
   p_requester_id VARCHAR(36)
 ) RETURNS JSON AS $$
 BEGIN
   RETURN (
-    SELECT row_to_json(r)
+    SELECT COALESCE(json_agg(r), '[]'::json)
     FROM (
       SELECT
         req.id,
+        req.card_holder_id,
         req.merchant,
         req.product_url,
         req.order_amount,
@@ -192,6 +155,8 @@ BEGIN
         req.incentive_fee,
         req.actual_amount_paid,
         req.screenshot_url,
+        req.psp_hold_id,
+        req.psp_paid_at,
         req.created_at,
         req.updated_at,
         u.display_name AS card_holder_name,
@@ -203,14 +168,62 @@ BEGIN
       JOIN cards c ON c.id = req.card_id
       WHERE req.requester_id = p_requester_id
       AND req.rq_status IN ('pending', 'payment_pending', 'escrow_locked', 'tracking_submitted')
+      ORDER BY req.created_at DESC
     ) r
   );
 END;
 $$ LANGUAGE plpgsql;
 
 
--- Sara approves after seeing the screenshot — pays Ahmed and settles
--- Row locked with FOR UPDATE — competes with raise_dispute
+CREATE OR REPLACE FUNCTION get_request_requester(
+  p_request_id   VARCHAR(36),
+  p_requester_id VARCHAR(36)
+) RETURNS JSON AS $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM requests
+    WHERE id = p_request_id
+    AND requester_id = p_requester_id
+  ) THEN
+    RAISE EXCEPTION 'Request not found or access denied.';
+  END IF;
+
+  RETURN (
+    SELECT row_to_json(r)
+    FROM (
+      SELECT
+        req.id,
+        req.card_holder_id,
+        req.merchant,
+        req.product_url,
+        req.order_amount,
+        req.discount_percentage,
+        req.delivery_address,
+        req.note,
+        req.rq_status,
+        req.platform_fee,
+        req.incentive_fee,
+        req.actual_amount_paid,
+        req.screenshot_url,
+        req.psp_hold_id,
+        req.psp_paid_at,
+        req.created_at,
+        req.updated_at,
+        u.display_name AS card_holder_name,
+        c.bank_name,
+        c.card_type,
+        c.card_tier
+      FROM requests req
+      JOIN users u ON u.id = req.card_holder_id
+      JOIN cards c ON c.id = req.card_id
+      WHERE req.id = p_request_id
+    ) r
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Sara confirms after PSP release webhook — bumps saved/earned counters only
 CREATE OR REPLACE FUNCTION confirm_tracking(
   p_request_id   VARCHAR(36),
   p_requester_id VARCHAR(36)
@@ -219,6 +232,8 @@ DECLARE
   v_request RECORD;
   v_card    RECORD;
   v_txn_id  VARCHAR(36);
+  v_saved   INT;
+  v_now     BIGINT;
 BEGIN
   SELECT * INTO v_request FROM requests
   WHERE id = p_request_id
@@ -232,18 +247,18 @@ BEGIN
 
   SELECT * INTO v_card FROM cards WHERE id = v_request.card_id;
 
+  v_saved := v_request.order_amount - v_request.actual_amount_paid
+             - v_request.incentive_fee - v_request.platform_fee;
+
   UPDATE users
-  SET wallet_balance = wallet_balance + (v_request.actual_amount_paid + v_request.incentive_fee)
+  SET total_earned = total_earned + v_request.incentive_fee
   WHERE id = v_request.card_holder_id;
 
-  UPDATE platform_account
-  SET wallet_balance = wallet_balance + v_request.platform_fee
-  WHERE id = 1;
-
   UPDATE users
-  SET wallet_balance = wallet_balance + (v_request.order_amount - v_request.actual_amount_paid - v_request.incentive_fee - v_request.platform_fee)
+  SET total_saved = total_saved + v_saved
   WHERE id = v_request.requester_id;
 
+  v_now    := extract(epoch from now()) * 1000;
   v_txn_id := uuid_generate_v4()::varchar;
 
   INSERT INTO transactions (
@@ -252,6 +267,7 @@ BEGIN
     bank_name, card_type, card_tier,
     platform_fee, incentive_fee, actual_amount_paid,
     txn_status, screenshot_url, dispute_reason,
+    psp_hold_id, psp_paid_at, psp_settled_at,
     created_at, updated_at
   ) VALUES (
     v_txn_id, v_request.requester_id, v_request.card_holder_id,
@@ -260,7 +276,8 @@ BEGIN
     v_card.bank_name, v_card.card_type, v_card.card_tier,
     v_request.platform_fee, v_request.incentive_fee, v_request.actual_amount_paid,
     'completed', v_request.screenshot_url, NULL,
-    extract(epoch from now()) * 1000, extract(epoch from now()) * 1000
+    v_request.psp_hold_id, v_request.psp_paid_at, v_now,
+    v_now, v_now
   );
 
   DELETE FROM requests WHERE id = p_request_id;
@@ -273,8 +290,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Sara rejects the screenshot/amount — full refund
--- Row locked with FOR UPDATE — competes with confirm_tracking
+-- Sara disputes after PSP refund webhook
 CREATE OR REPLACE FUNCTION raise_dispute(
   p_request_id   VARCHAR(36),
   p_requester_id VARCHAR(36),
@@ -284,6 +300,7 @@ DECLARE
   v_request RECORD;
   v_card    RECORD;
   v_txn_id  VARCHAR(36);
+  v_now     BIGINT;
 BEGIN
   IF p_reason IS NULL OR TRIM(p_reason) = '' THEN
     RAISE EXCEPTION 'A reason is required to raise a dispute.';
@@ -301,10 +318,7 @@ BEGIN
 
   SELECT * INTO v_card FROM cards WHERE id = v_request.card_id;
 
-  UPDATE users
-  SET wallet_balance = wallet_balance + v_request.order_amount
-  WHERE id = v_request.requester_id;
-
+  v_now    := extract(epoch from now()) * 1000;
   v_txn_id := uuid_generate_v4()::varchar;
 
   INSERT INTO transactions (
@@ -313,6 +327,7 @@ BEGIN
     bank_name, card_type, card_tier,
     platform_fee, incentive_fee, actual_amount_paid,
     txn_status, screenshot_url, dispute_reason,
+    psp_hold_id, psp_paid_at, psp_settled_at,
     created_at, updated_at
   ) VALUES (
     v_txn_id, v_request.requester_id, v_request.card_holder_id,
@@ -321,7 +336,8 @@ BEGIN
     v_card.bank_name, v_card.card_type, v_card.card_tier,
     v_request.platform_fee, v_request.incentive_fee, v_request.actual_amount_paid,
     'disputed', v_request.screenshot_url, p_reason,
-    extract(epoch from now()) * 1000, extract(epoch from now()) * 1000
+    v_request.psp_hold_id, v_request.psp_paid_at, v_now,
+    v_now, v_now
   );
 
   DELETE FROM requests WHERE id = p_request_id;
@@ -335,7 +351,6 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Sara's history of all finalised orders
 CREATE OR REPLACE FUNCTION get_transaction_history_requester(
   p_requester_id VARCHAR(36)
 ) RETURNS JSON AS $$
@@ -359,6 +374,9 @@ BEGIN
         txn.txn_status,
         txn.screenshot_url,
         txn.dispute_reason,
+        txn.psp_hold_id,
+        txn.psp_paid_at,
+        txn.psp_settled_at,
         txn.created_at,
         txn.updated_at,
         u.display_name AS card_holder_name
