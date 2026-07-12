@@ -1,24 +1,16 @@
 const express = require('express');
-const router  = express.Router();
-const auth    = require('../middleware/auth');
-const {
-  createRequest,
-  cancelRequest,
-  confirmPayment,
-  getActiveRequest,
-  confirmTracking,
-  raiseDispute,
-  getTransactionHistory,
-} = require('../controllers/requester.controller');
+const router = express.Router();
+const auth = require('../middleware/auth');
+const controller = require('../controllers/requester.controller');
 
 router.use(auth);
 
-router.get   ('/transactions/history', getTransactionHistory);
-router.get   ('/active',               getActiveRequest);
-router.post  ('/',                    createRequest);
-router.delete('/:id',                 cancelRequest);
-router.post  ('/:id/payment',         confirmPayment);
-router.post  ('/:id/confirm',         confirmTracking);
-router.post  ('/:id/dispute',         raiseDispute);
+router.get('/history', controller.getTransactionHistory);
+router.get('/requests', controller.getActiveRequests);
+router.post('/requests', controller.createRequest);
+router.get('/requests/:id', controller.getRequest);
+router.delete('/requests/:id', controller.cancelRequest);
+router.post('/requests/:id/confirm', controller.confirmTracking);
+router.post('/requests/:id/dispute', controller.raiseDispute);
 
 module.exports = router;

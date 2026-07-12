@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS requests (
   merchant             VARCHAR(100) NOT NULL,
   product_url          TEXT,
   delivery_address     TEXT NOT NULL,
-  order_amount         INT NOT NULL CHECK (order_amount > 0),
+  order_amount         INT NOT NULL CHECK (order_amount > 100),
   discount_percentage  INT NOT NULL DEFAULT 0,
   note                 TEXT,
 
@@ -189,11 +189,15 @@ CREATE TABLE IF NOT EXISTS transactions (
 
 /* ── CHAT ───────────────────────────────────────────────────── */
 CREATE TABLE IF NOT EXISTS chat_messages (
-  id           VARCHAR(36) PRIMARY KEY,
-  request_id   VARCHAR(36) NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
-  sender_id    VARCHAR(36) NOT NULL REFERENCES users(id),
-  chat_message TEXT NOT NULL,
-  created_at   BIGINT NOT NULL
+  id              VARCHAR(36) PRIMARY KEY,
+  request_id      VARCHAR(36) NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+  sender_id       VARCHAR(36) NOT NULL REFERENCES users(id),
+  chat_message    TEXT,
+  attachment_path VARCHAR(200),
+  created_at      BIGINT NOT NULL,
+  CONSTRAINT chat_message_has_content CHECK (
+    chat_message IS NOT NULL OR attachment_path IS NOT NULL
+  )
 );
 
 
@@ -1515,10 +1519,14 @@ $$ LANGUAGE plpgsql;
    ───────────────────────────────────────────────────────────── */
 
 CREATE OR REPLACE PROCEDURE send_message(
-  p_request_id VARCHAR(36),
-  p_sender_id  VARCHAR(36),
-  p_message    TEXT
+  p_request_id        VARCHAR(36),
+  p_sender_id         VARCHAR(36),
+  p_message           TEXT,
+  p_attachment_path   VARCHAR(200)
 ) AS $$
+DECLARE
+  v_message TEXT;
+  v_attachment TEXT;
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM requests
@@ -1529,8 +1537,24 @@ BEGIN
     RAISE EXCEPTION 'Request not found or chat not available.';
   END IF;
 
-  INSERT INTO chat_messages (id, request_id, sender_id, chat_message, created_at)
-  VALUES (uuid_generate_v4()::varchar, p_request_id, p_sender_id, p_message, extract(epoch from now()) * 1000);
+  v_message := NULLIF(TRIM(p_message), '');
+  v_attachment := NULLIF(TRIM(p_attachment_path), '');
+
+  IF v_message IS NULL AND v_attachment IS NULL THEN
+    RAISE EXCEPTION 'Message or attachment is required.';
+  END IF;
+
+  INSERT INTO chat_messages (
+    id, request_id, sender_id, chat_message, attachment_path, created_at
+  )
+  VALUES (
+    uuid_generate_v4()::varchar,
+    p_request_id,
+    p_sender_id,
+    v_message,
+    v_attachment,
+    extract(epoch from now()) * 1000
+  );
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1554,7 +1578,7 @@ BEGIN
     SELECT COALESCE(json_agg(m), '[]'::json)
     FROM (
       SELECT cm.id, cm.sender_id, u.display_name AS sender_name,
-             cm.chat_message, cm.created_at
+             cm.chat_message, cm.attachment_path, cm.created_at
       FROM chat_messages cm
       JOIN users u ON u.id = cm.sender_id
       WHERE cm.request_id = p_request_id

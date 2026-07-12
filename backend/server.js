@@ -1,20 +1,17 @@
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
-const express    = require('express');
-const helmet     = require('helmet');
-const cors       = require('cors');
+const express = require('express');
+const helmet = require('helmet');
+const cors = require('cors');
 
-const authRoutes       = require('./routes/auth.routes');
-const onboardingRoutes = require('./routes/onboarding.routes');
-const profileRoutes    = require('./routes/profile.routes');
-const cardRoutes       = require('./routes/cards.routes');
-const circleRoutes     = require('./routes/circle.routes');
-const requesterRoutes  = require('./routes/requester.routes');
-const holderRoutes     = require('./routes/holder.routes');
-const walletRoutes     = require('./routes/wallet.routes');
-
-const app  = express();
+const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Behind Railway/Render/nginx/Cloudflare — use real client IP for rate limiting
+if (process.env.NODE_ENV === 'production' || process.env.TRUST_PROXY === 'true') {
+  app.set('trust proxy', 1);
+}
 
 const defaultOrigins = [
   'http://localhost:5173',
@@ -36,25 +33,29 @@ const allowedOrigins = [
 app.use(helmet());
 app.use(cors({
   origin(origin, callback) {
-    // No Origin: Postman, curl, native mobile — allow
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       callback(null, false);
     }
   },
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Id'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Id', 'X-Psp-Webhook-Secret'],
 }));
 app.use(express.json());
 
-app.use('/api/auth',       authRoutes);
-app.use('/api/onboarding', onboardingRoutes);
-app.use('/api/profile',    profileRoutes);
-app.use('/api/cards',      cardRoutes);
-app.use('/api/circle',     circleRoutes);
-app.use('/api/requests',   requesterRoutes);
-app.use('/api/orders',     holderRoutes);
-app.use('/api/wallet',     walletRoutes);
+app.get('/health', (req, res) => {
+  res.json({ ok: true });
+});
+
+app.use('/api/auth', require('./routes/auth.routes'));
+app.use('/api/onboarding', require('./routes/onboarding.routes'));
+app.use('/api/profile', require('./routes/profile.routes'));
+app.use('/api/cards', require('./routes/cards.routes'));
+app.use('/api/circle', require('./routes/circle.routes'));
+app.use('/api/requester', require('./routes/requester.routes'));
+app.use('/api/holder', require('./routes/holder.routes'));
+app.use('/api/chat', require('./routes/chat.routes'));
+app.use('/api/psp/dev', require('./routes/psp.routes'));
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found.' });

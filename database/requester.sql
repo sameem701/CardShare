@@ -32,6 +32,10 @@ DECLARE
   v_est_platform_fee  INT;
   v_est_incentive_fee INT;
 BEGIN
+  IF p_order_amount <= 100 THEN
+    RAISE EXCEPTION 'Order amount must be greater than 100 PKR.';
+  END IF;
+
   IF NOT EXISTS (
     SELECT 1 FROM circle
     WHERE ((user_id = p_requester_id AND friend_id = p_card_holder_id)

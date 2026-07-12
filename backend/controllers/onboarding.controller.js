@@ -1,11 +1,10 @@
-const db     = require('../config/db');
+const db = require('../config/db');
 const bcrypt = require('bcryptjs');
 
 const normalizeSecurityAnswer = (answer) => answer.trim().toLowerCase();
 
-// POST /api/onboarding/profile
-// Sets the user's display name — first step of onboarding
-// Requires: display_name in body
+// Step 1 — POST /api/onboarding/profile
+// Sets display name (phone already set at OTP verify)
 const updateProfile = async (req, res) => {
   const { display_name } = req.body;
   const user_id = req.user.id;
@@ -13,7 +12,6 @@ const updateProfile = async (req, res) => {
   if (!display_name || display_name.trim() === '') {
     return res.status(400).json({ error: 'Display name is required.' });
   }
-
 
   try {
     await db.query('CALL update_profile($1, $2)', [user_id, display_name.trim()]);
@@ -23,10 +21,8 @@ const updateProfile = async (req, res) => {
   }
 };
 
-// POST /api/onboarding/pin
-// Stores the user's PIN — second step of onboarding
-// Client sends plain PIN over HTTPS — backend hashes it with bcrypt before storing
-// Requires: pin in body
+// Step 2 — POST /api/onboarding/pin
+// 6-digit PIN — hashed in Node before store
 const upsertPin = async (req, res) => {
   const { pin } = req.body;
   const user_id = req.user.id;
@@ -44,14 +40,14 @@ const upsertPin = async (req, res) => {
   }
 };
 
-// POST /api/onboarding/security
-// Sets security question (plain text) + bcrypt-hashed answer — step 3 of onboarding
+// Step 3 — POST /api/onboarding/security
+// Security question + bcrypt-hashed answer (forgot PIN on known device)
 const setSecurityQuestion = async (req, res) => {
   const { security_question, security_answer } = req.body;
   const user_id = req.user.id;
 
-  if (!security_question || security_question.trim().length < 5) {
-    return res.status(400).json({ error: 'Security question must be at least 5 characters.' });
+  if (!security_question ) {
+    return res.status(400).json({ error: 'Security question is required.' });
   }
 
   if (!security_answer || normalizeSecurityAnswer(security_answer).length < 2) {
@@ -70,8 +66,8 @@ const setSecurityQuestion = async (req, res) => {
   }
 };
 
-// POST /api/onboarding/complete
-// Final onboarding step — sets is_onboarded (device already bound at OTP verify)
+// Step 4 — POST /api/onboarding/complete
+// Requires profile + PIN + security question; sets is_onboarded = 1
 const completeOnboarding = async (req, res) => {
   const user_id = req.user.id;
 

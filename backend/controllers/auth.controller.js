@@ -1,6 +1,6 @@
-const db     = require('../config/db');
+const db = require('../config/db');
 const bcrypt = require('bcryptjs');
-const jwt    = require('jsonwebtoken');
+const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { sendWhatsApp } = require('../utils/sms');
 const { getDeviceId } = require('../utils/requestDevice');
@@ -9,13 +9,12 @@ const { getDeviceId } = require('../utils/requestDevice');
 // Protected routes: Authorization Bearer + X-Device-Id header.
 // Session row + users.device_id checked in auth middleware on every request.
 
-const ACCESS_TTL_MS   = 5 * 60 * 1000;
-const REFRESH_TTL_MS  = 30 * 24 * 60 * 60 * 1000;
+const ACCESS_TTL_MS = 5 * 60 * 1000;
+const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const PIN_RESET_TTL_MS = 15 * 60 * 1000;
 
 const normalizeSecurityAnswer = (answer) => answer.trim().toLowerCase();
 
-// OTP is hashed with SHA-256 — deterministic so the DB can compare directly
 const sha256 = (str) => crypto.createHash('sha256').update(str).digest('hex');
 
 const generateRefreshToken = () => crypto.randomBytes(32).toString('hex');
@@ -27,11 +26,16 @@ const issueToken = (session_id, user_id) => jwt.sign(
 );
 
 const stripSensitiveUserFields = (user) => {
-  const { pin_hash, device_id: _d, ...safeUser } = user;
+  const {
+    pin_hash,
+    security_answer_hash,
+    device_id: _d,
+    ...safeUser
+  } = user;
   return safeUser;
 };
 
-const mapOtpError = (err, res) => {
+const mapAuthLockoutError = (err, res) => {
   const msg = err.message || '';
 
   if (msg === 'OTP_CONTACT_SUPPORT') {
@@ -82,7 +86,7 @@ const issueAuthResponse = async (user, device_id) => {
   );
   const session_id = sessionRows[0].result.session_id;
 
-  const token   = issueToken(session_id, user.id);
+  const token = issueToken(session_id, user.id);
   const refresh = await storeRefreshToken(user.id, device_id, generateRefreshToken());
 
   return {
@@ -94,8 +98,6 @@ const issueAuthResponse = async (user, device_id) => {
 };
 
 // POST /api/auth/status
-// Called silently by the app on startup using phone + device_id stored locally
-// Returns new_user / new_device / known_device so the app knows which screen to show
 const getLoginStatus = async (req, res) => {
   const { phone, device_id } = req.body;
 
@@ -115,7 +117,6 @@ const getLoginStatus = async (req, res) => {
 };
 
 // POST /api/auth/otp/send
-// Generates a 6-digit OTP, hashes it, stores it, sends SMS via Twilio
 const sendOtp = async (req, res) => {
   const { phone } = req.body;
 
@@ -123,9 +124,9 @@ const sendOtp = async (req, res) => {
     return res.status(400).json({ error: 'Phone number is required.' });
   }
 
-  const otp        = Math.floor(100000 + Math.random() * 900000).toString();
-  const otp_hash   = sha256(otp);
-  const expires_at = Date.now() + 5 * 60 * 1000; // 5 minutes from now
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const otp_hash = sha256(otp);
+  const expires_at = Date.now() + 5 * 60 * 1000;
 
   try {
     await db.query('CALL store_otp($1, $2, $3)', [phone, otp_hash, expires_at]);
@@ -133,15 +134,13 @@ const sendOtp = async (req, res) => {
     console.log(`OTP for ${phone}: ${otp}`);
     res.json({ message: 'OTP sent.' });
   } catch (err) {
-    const mapped = mapOtpError(err, res);
+    const mapped = mapAuthLockoutError(err, res);
     if (mapped) return mapped;
     res.status(400).json({ error: err.message });
   }
 };
 
 // POST /api/auth/otp/verify
-// New users (is_onboarded=0): binds device, returns tokens for onboarding routes.
-// Existing users (is_onboarded=1): binds device, returns requires_pin — session after pin/verify.
 const verifyOtp = async (req, res) => {
   const { phone, otp, device_id } = req.body;
 
@@ -167,14 +166,13 @@ const verifyOtp = async (req, res) => {
 
     res.json(await issueAuthResponse(user, device_id));
   } catch (err) {
-    const mapped = mapOtpError(err, res);
+    const mapped = mapAuthLockoutError(err, res);
     if (mapped) return mapped;
     res.status(400).json({ error: err.message });
   }
 };
 
 // POST /api/auth/pin/verify
-// Known device returning users — PIN lockout in DB, bcrypt compare in Node
 const verifyPin = async (req, res) => {
   const { phone, pin, device_id } = req.body;
 
@@ -186,8 +184,8 @@ const verifyPin = async (req, res) => {
     await db.query('CALL assert_pin_phone_allowed($1)', [phone]);
 
     const { rows } = await db.query(
-      `SELECT id, phone, display_name, wallet_balance, is_onboarded,
-              pin_hash, device_id
+      `SELECT id, phone, display_name, total_saved, total_earned, payout_status,
+              is_onboarded, pin_hash, device_id
        FROM users WHERE phone = $1`,
       [phone]
     );
@@ -215,7 +213,7 @@ const verifyPin = async (req, res) => {
     await db.query('CALL clear_pin_phone_lockout($1)', [phone]);
     res.json(await issueAuthResponse(user, device_id));
   } catch (err) {
-    const mapped = mapOtpError(err, res);
+    const mapped = mapAuthLockoutError(err, res);
     if (mapped) return mapped;
     res.status(400).json({ error: err.message });
   }
@@ -236,7 +234,7 @@ const getForgotPinQuestion = async (req, res) => {
     );
     res.json(rows[0].result);
   } catch (err) {
-    const mapped = mapOtpError(err, res);
+    const mapped = mapAuthLockoutError(err, res);
     if (mapped) return mapped;
     res.status(400).json({ error: err.message });
   }
@@ -290,7 +288,7 @@ const verifyForgotPinAnswer = async (req, res) => {
       reset_expires_in_ms: PIN_RESET_TTL_MS,
     });
   } catch (err) {
-    const mapped = mapOtpError(err, res);
+    const mapped = mapAuthLockoutError(err, res);
     if (mapped) return mapped;
     res.status(400).json({ error: err.message });
   }
@@ -316,15 +314,13 @@ const resetForgotPin = async (req, res) => {
     );
     res.json({ message: 'PIN reset successful. Please log in with your new PIN.' });
   } catch (err) {
-    const mapped = mapOtpError(err, res);
+    const mapped = mapAuthLockoutError(err, res);
     if (mapped) return mapped;
     res.status(400).json({ error: err.message });
   }
 };
 
 // POST /api/auth/refresh
-// Rotates refresh token and issues a new 5m access JWT (same session_id).
-// X-Device-Id header required; body device_id accepted as fallback.
 const refreshToken = async (req, res) => {
   const { refresh_token } = req.body;
   const device_id = getDeviceId(req, { allowBody: true });
@@ -337,9 +333,9 @@ const refreshToken = async (req, res) => {
     return res.status(400).json({ error: 'X-Device-Id header is required.' });
   }
 
-  const old_hash   = sha256(refresh_token);
-  const new_plain  = generateRefreshToken();
-  const new_hash   = sha256(new_plain);
+  const old_hash = sha256(refresh_token);
+  const new_plain = generateRefreshToken();
+  const new_hash = sha256(new_plain);
   const expires_at = Date.now() + REFRESH_TTL_MS;
 
   try {
@@ -358,7 +354,9 @@ const refreshToken = async (req, res) => {
       id: result.user_id,
       phone: result.phone,
       display_name: result.display_name,
-      wallet_balance: result.wallet_balance,
+      total_saved: result.total_saved,
+      total_earned: result.total_earned,
+      payout_status: result.payout_status,
       is_onboarded: result.is_onboarded,
     };
 
@@ -367,7 +365,7 @@ const refreshToken = async (req, res) => {
       access_expires_in_ms: ACCESS_TTL_MS,
       refresh_token: new_plain,
       refresh_expires_at: Number(result.expires_at),
-      user: stripSensitiveUserFields({ ...user, device_id }),
+      user: stripSensitiveUserFields({ ...user, device_id: result.device_id }),
     });
   } catch (err) {
     res.status(401).json({ error: err.message });
@@ -375,7 +373,6 @@ const refreshToken = async (req, res) => {
 };
 
 // POST /api/auth/logout
-// Revokes session + refresh; device binding kept (requires valid access JWT + X-Device-Id)
 const logout = async (req, res) => {
   try {
     await db.query('CALL logout_user($1)', [req.user.id]);

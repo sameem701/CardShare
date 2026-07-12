@@ -1,20 +1,14 @@
 const express = require('express');
-const router  = express.Router();
-const auth    = require('../middleware/auth');
-const {
-  sendInvite,
-  respondToInvite,
-  removeFromCircle,
-  getCircle,
-  getCircleCards,
-} = require('../controllers/circle.controller');
+const router = express.Router();
+const auth = require('../middleware/auth');
+const controller = require('../controllers/circle.controller');
 
 router.use(auth);
 
-router.post  ('/invite',               sendInvite);
-router.patch ('/invite/:friend_id',    respondToInvite);
-router.delete('/:friend_id',           removeFromCircle);
-router.get   ('/',                     getCircle);
-router.get   ('/:friend_id/cards',     getCircleCards);
+router.post('/invite', controller.sendInvite);
+router.patch('/invite/:friend_id', controller.respondToInvite);
+router.get('/', controller.getCircle);
+router.get('/:friend_id/cards', controller.getCircleCards);
+router.delete('/:friend_id', controller.removeFromCircle);
 
 module.exports = router;

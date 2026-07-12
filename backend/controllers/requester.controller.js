@@ -1,9 +1,19 @@
 const db = require('../config/db');
+const { attachSignedScreenshotUrl } = require('../utils/screenshotStorage');
 
-// POST /api/requests
-// Sara creates a request targeting one of Ahmed's shared cards
-// Requires: card_holder_id, card_id, merchant, product_url, delivery_address,
-//           order_amount, discount_percentage in body. note is optional.
+const MIN_ORDER_AMOUNT_PKR = 100;
+
+const requireRequestId = (req, res) => {
+  const request_id = req.params.id;
+  if (!request_id || String(request_id).trim() === '') {
+    res.status(400).json({ error: 'Request id is required.' });
+    return null;
+  }
+  return request_id;
+};
+
+// POST /api/requester/requests
+// Sara creates a request against a circle friend's shared card
 const createRequest = async (req, res) => {
   const requester_id = req.user.id;
   const {
@@ -14,29 +24,51 @@ const createRequest = async (req, res) => {
     delivery_address,
     order_amount,
     discount_percentage,
-    note = null,
+    note,
   } = req.body;
 
-  if (!card_holder_id || !card_id || !merchant || !product_url ||
-      !delivery_address || !order_amount || discount_percentage === undefined) {
+  if (!card_holder_id || String(card_holder_id).trim() === '') {
+    return res.status(400).json({ error: 'card_holder_id is required.' });
+  }
+  if (!card_id || String(card_id).trim() === '') {
+    return res.status(400).json({ error: 'card_id is required.' });
+  }
+  if (!merchant || String(merchant).trim() === '') {
+    return res.status(400).json({ error: 'merchant is required.' });
+  }
+  if (!delivery_address || String(delivery_address).trim() === '') {
+    return res.status(400).json({ error: 'delivery_address is required.' });
+  }
+
+  const amount = Number(order_amount);
+  if (!Number.isInteger(amount) || amount <= MIN_ORDER_AMOUNT_PKR) {
     return res.status(400).json({
-      error: 'card_holder_id, card_id, merchant, product_url, delivery_address, order_amount and discount_percentage are required.',
+      error: `order_amount must be a whole number greater than ${MIN_ORDER_AMOUNT_PKR} PKR.`,
     });
   }
 
-  if (!Number.isInteger(order_amount) || order_amount <= 0) {
-    return res.status(400).json({ error: 'order_amount must be a positive integer.' });
-  }
+  const discount = discount_percentage === undefined || discount_percentage === null
+    ? 0
+    : Number(discount_percentage);
 
-  if (!Number.isInteger(discount_percentage) || discount_percentage < 1 || discount_percentage > 99) {
-    return res.status(400).json({ error: 'discount_percentage must be an integer between 1 and 99.' });
+  if (!Number.isInteger(discount) || discount < 0 || discount > 100) {
+    return res.status(400).json({ error: 'discount_percentage must be an integer between 0 and 100.' });
   }
 
   try {
     const { rows } = await db.query(
-      'SELECT create_request($1,$2,$3,$4,$5,$6,$7,$8,$9) AS result',
-      [requester_id, card_holder_id, card_id, merchant, product_url,
-       delivery_address, order_amount, discount_percentage, note]
+      `SELECT create_request($1, $2, $3, $4, $5, $6, $7, $8, $9) AS result`,
+      [
+        requester_id,
+        card_holder_id,
+        card_id,
+        String(merchant).trim(),
+        product_url ? String(product_url).trim() : null,
+        String(delivery_address).trim(),
+        amount,
+        discount,
+        note ? String(note).trim() : null,
+      ]
     );
     res.status(201).json(rows[0].result);
   } catch (err) {
@@ -44,65 +76,50 @@ const createRequest = async (req, res) => {
   }
 };
 
-// DELETE /api/requests/:id
-// Sara cancels before payment — pending or payment_pending. Notify Ahmed in app layer if payment_pending.
-const cancelRequest = async (req, res) => {
-  const requester_id = req.user.id;
-  const request_id   = req.params.id;
-
-  try {
-    const { rows } = await db.query(
-      'SELECT cancel_request($1,$2) AS result',
-      [request_id, requester_id]
-    );
-    res.json(rows[0].result);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-};
-
-// POST /api/requests/:id/payment
-// Sara confirms payment after Ahmed accepts (pay-on-accept) — locks escrow from wallet
-const confirmPayment = async (req, res) => {
-  const requester_id = req.user.id;
-  const request_id   = req.params.id;
-
-  try {
-    const { rows } = await db.query(
-      'SELECT confirm_payment($1,$2) AS result',
-      [request_id, requester_id]
-    );
-    res.json(rows[0].result);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-};
-
-// GET /api/requests/active
-// Sara's current purchase — one active row or null (requester_id only, not holder role)
-const getActiveRequest = async (req, res) => {
+// GET /api/requester/requests
+// Sara's active orders
+const getActiveRequests = async (req, res) => {
   const requester_id = req.user.id;
 
   try {
     const { rows } = await db.query(
-      'SELECT get_request_requester($1) AS result',
+      'SELECT get_active_requests_requester($1) AS result',
       [requester_id]
     );
-    res.json(rows[0].result);
+    res.json(rows[0].result ?? []);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 };
 
-// POST /api/requests/:id/confirm
-// Sara confirms the screenshot — pays Ahmed and settles the order
-const confirmTracking = async (req, res) => {
+// GET /api/requester/requests/:id
+// Single active request detail
+const getRequest = async (req, res) => {
   const requester_id = req.user.id;
-  const request_id   = req.params.id;
+  const request_id = requireRequestId(req, res);
+  if (!request_id) return;
 
   try {
     const { rows } = await db.query(
-      'SELECT confirm_tracking($1,$2) AS result',
+      'SELECT get_request_requester($1, $2) AS result',
+      [request_id, requester_id]
+    );
+    res.json(await attachSignedScreenshotUrl(rows[0].result));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
+// DELETE /api/requester/requests/:id
+// Cancel before escrow locks (pending or payment_pending)
+const cancelRequest = async (req, res) => {
+  const requester_id = req.user.id;
+  const request_id = requireRequestId(req, res);
+  if (!request_id) return;
+
+  try {
+    const { rows } = await db.query(
+      'SELECT cancel_request($1, $2) AS result',
       [request_id, requester_id]
     );
     res.json(rows[0].result);
@@ -111,22 +128,17 @@ const confirmTracking = async (req, res) => {
   }
 };
 
-// POST /api/requests/:id/dispute
-// Sara raises a dispute after tracking is submitted (anytime — no deadline)
-// Requires: reason in body
-const raiseDispute = async (req, res) => {
+// POST /api/requester/requests/:id/confirm
+// Sara confirms Ahmed's tracking submission
+const confirmTracking = async (req, res) => {
   const requester_id = req.user.id;
-  const request_id   = req.params.id;
-  const { reason }   = req.body;
-
-  if (!reason || reason.trim() === '') {
-    return res.status(400).json({ error: 'A reason is required to raise a dispute.' });
-  }
+  const request_id = requireRequestId(req, res);
+  if (!request_id) return;
 
   try {
     const { rows } = await db.query(
-      'SELECT raise_dispute($1,$2,$3) AS result',
-      [request_id, requester_id, reason.trim()]
+      'SELECT confirm_tracking($1, $2) AS result',
+      [request_id, requester_id]
     );
     res.json(rows[0].result);
   } catch (err) {
@@ -134,8 +146,31 @@ const raiseDispute = async (req, res) => {
   }
 };
 
-// GET /api/transactions
-// Sara's full history of finalised orders (completed, disputed, cancelled, refunded)
+// POST /api/requester/requests/:id/dispute
+// Sara disputes after tracking submitted
+const raiseDispute = async (req, res) => {
+  const requester_id = req.user.id;
+  const request_id = requireRequestId(req, res);
+  if (!request_id) return;
+  const { reason } = req.body;
+
+  if (!reason || String(reason).trim() === '') {
+    return res.status(400).json({ error: 'reason is required.' });
+  }
+
+  try {
+    const { rows } = await db.query(
+      'SELECT raise_dispute($1, $2, $3) AS result',
+      [request_id, requester_id, String(reason).trim()]
+    );
+    res.json(rows[0].result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
+// GET /api/requester/history
+// Completed, disputed, and cancelled past orders
 const getTransactionHistory = async (req, res) => {
   const requester_id = req.user.id;
 
@@ -144,7 +179,7 @@ const getTransactionHistory = async (req, res) => {
       'SELECT get_transaction_history_requester($1) AS result',
       [requester_id]
     );
-    res.json(rows[0].result);
+    res.json(rows[0].result ?? []);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -152,9 +187,9 @@ const getTransactionHistory = async (req, res) => {
 
 module.exports = {
   createRequest,
+  getActiveRequests,
+  getRequest,
   cancelRequest,
-  confirmPayment,
-  getActiveRequest,
   confirmTracking,
   raiseDispute,
   getTransactionHistory,

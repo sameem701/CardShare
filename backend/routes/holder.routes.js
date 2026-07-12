@@ -1,27 +1,18 @@
 const express = require('express');
-const router  = express.Router();
-const auth    = require('../middleware/auth');
-const {
-  getIncomingRequests,
-  acceptRequest,
-  declineRequest,
-  cancelOrder,
-  submitTracking,
-  getActiveOrders,
-  getOrder,
-  getTransactionHistory,
-} = require('../controllers/holder.controller');
+const router = express.Router();
+const auth = require('../middleware/auth');
+const controller = require('../controllers/holder.controller');
 
 router.use(auth);
 
-// Static paths must come before /:id to avoid Express matching "incoming" as an id
-router.get   ('/incoming',        getIncomingRequests);
-router.get   ('/history',         getTransactionHistory);
-router.get   ('/',                getActiveOrders);
-router.get   ('/:id',             getOrder);
-router.post  ('/:id/accept',      acceptRequest);
-router.post  ('/:id/decline',     declineRequest);
-router.delete('/:id',             cancelOrder);
-router.post  ('/:id/tracking',    submitTracking);
+router.get('/history', controller.getTransactionHistory);
+router.get('/incoming', controller.getIncomingRequests);
+router.get('/orders', controller.getActiveOrders);
+router.get('/orders/:id', controller.getOrder);
+router.post('/orders/:id/accept', controller.acceptRequest);
+router.post('/orders/:id/decline', controller.declineRequest);
+router.post('/orders/:id/screenshot/upload-url', controller.getScreenshotUploadUrl);
+router.post('/orders/:id/tracking', controller.submitTracking);
+router.delete('/orders/:id', controller.cancelOrder);
 
 module.exports = router;

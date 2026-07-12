@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const db  = require('../config/db');
+const db = require('../config/db');
 const { getDeviceId } = require('../utils/requestDevice');
 
 const validateActiveSession = async (session_id, user_id, deviceId) => {
