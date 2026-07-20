@@ -57,6 +57,7 @@ app.use('/api/holder', require('./routes/holder.routes'));
 app.use('/api/chat', require('./routes/chat.routes'));
 app.use('/api/psp/dev', require('./routes/psp.routes'));
 app.use('/api/webhooks/safepay', require('./routes/safepay.routes'));
+app.use('/payment', require('./routes/payment.routes'));
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found.' });
