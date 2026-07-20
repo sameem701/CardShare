@@ -22,7 +22,7 @@ const generateRefreshToken = () => crypto.randomBytes(32).toString('hex');
 const issueToken = (session_id, user_id) => jwt.sign(
   { session_id, user_id },
   process.env.JWT_SECRET,
-  { expiresIn: '5m' }
+  { expiresIn: '120m' }
 );
 
 const stripSensitiveUserFields = (user) => {

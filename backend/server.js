@@ -42,7 +42,6 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Id', 'X-Psp-Webhook-Secret'],
 }));
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
 app.get('/health', (req, res) => {
   res.json({ ok: true });
@@ -57,7 +56,7 @@ app.use('/api/requester', require('./routes/requester.routes'));
 app.use('/api/holder', require('./routes/holder.routes'));
 app.use('/api/chat', require('./routes/chat.routes'));
 app.use('/api/psp/dev', require('./routes/psp.routes'));
-app.use('/api/psp/sandbox', require('./routes/pspSandbox.routes'));
+app.use('/api/webhooks/safepay', require('./routes/safepay.routes'));
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found.' });

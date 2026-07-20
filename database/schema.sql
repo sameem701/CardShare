@@ -1251,48 +1251,6 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- PSP webhook: Sara paid — escrow locked (replaces fake-wallet confirm_payment)
-CREATE OR REPLACE FUNCTION lock_escrow(
-  p_request_id   VARCHAR(36),
-  p_requester_id VARCHAR(36),
-  p_psp_hold_id  VARCHAR(200)
-) RETURNS JSON AS $$
-DECLARE
-  v_request RECORD;
-BEGIN
-  IF p_psp_hold_id IS NULL OR TRIM(p_psp_hold_id) = '' THEN
-    RAISE EXCEPTION 'PSP hold id is required.';
-  END IF;
-
-  SELECT * INTO v_request FROM requests
-  WHERE id = p_request_id
-  AND requester_id = p_requester_id
-  AND rq_status = 'payment_pending'
-  FOR UPDATE;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
-  END IF;
-
-  UPDATE requests
-  SET rq_status   = 'escrow_locked',
-      psp_hold_id = p_psp_hold_id,
-      psp_paid_at = extract(epoch from now()) * 1000,
-      updated_at  = extract(epoch from now()) * 1000
-  WHERE id = p_request_id;
-
-  RETURN (
-    SELECT row_to_json(r)
-    FROM (
-      SELECT id, merchant, order_amount, platform_fee, incentive_fee,
-             rq_status, psp_hold_id, updated_at
-      FROM requests WHERE id = p_request_id
-    ) r
-  );
-END;
-$$ LANGUAGE plpgsql;
-
-
 /* ─────────────────────────────────────────────────────────────
    CARDS
    User adds cards, toggles sharing, then circle members can see them

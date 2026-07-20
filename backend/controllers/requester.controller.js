@@ -1,5 +1,6 @@
 const db = require('../config/db');
 const { attachSignedScreenshotUrl } = require('../utils/screenshotStorage');
+const { createPaymentTracker, createHostedCheckoutUrl } = require('../utils/safepay');
 
 const MIN_ORDER_AMOUNT_PKR = 100;
 
@@ -128,6 +129,62 @@ const cancelRequest = async (req, res) => {
   }
 };
 
+// POST /api/requester/requests/:id/pay
+// Sara starts Safepay checkout — returns tracker + hosted checkout URL
+const initiatePay = async (req, res) => {
+  const requester_id = req.user.id;
+  const request_id = requireRequestId(req, res);
+  if (!request_id) return;
+
+  try {
+    const { rows } = await db.query(
+      `SELECT id, order_amount, rq_status
+       FROM requests
+       WHERE id = $1 AND requester_id = $2`,
+      [request_id, requester_id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: 'Request not found or access denied.' });
+    }
+
+    const request = rows[0];
+    if (request.rq_status !== 'payment_pending') {
+      return res.status(400).json({
+        error: 'Payment can only be started when the order is awaiting payment.',
+      });
+    }
+
+    const amountPaisa = request.order_amount * 100;
+    const tracker = await createPaymentTracker({
+      requestId: request_id,
+      amountPaisa,
+    });
+    const checkout_url = await createHostedCheckoutUrl({
+      tracker,
+      requestId: request_id,
+    });
+
+    return res.status(200).json({
+      message: 'Checkout session created successfully.',
+      request_id,
+      order_amount: request.order_amount,
+      amount_paisa: amountPaisa,
+      tracker,
+      checkout_url,
+    });
+  } catch (err) {
+    console.error('Safepay pay initiation failed:', err.message);
+    if (
+      err.message.includes('SAFEPAY_SECRET_KEY')
+      || err.message.includes('SAFEPAY_MERCHANT_API_KEY')
+    ) {
+      return res.status(503).json({ error: err.message });
+    }
+    return res.status(500).json({ error: 'Failed to initiate Safepay checkout.' });
+  }
+};
+
 // POST /api/requester/requests/:id/confirm
 // Sara confirms Ahmed's tracking submission
 const confirmTracking = async (req, res) => {
@@ -190,6 +247,7 @@ module.exports = {
   getActiveRequests,
   getRequest,
   cancelRequest,
+  initiatePay,
   confirmTracking,
   raiseDispute,
   getTransactionHistory,
