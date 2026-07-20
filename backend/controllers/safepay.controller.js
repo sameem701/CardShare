@@ -10,11 +10,43 @@ const isTrackToken = (value) => typeof value === 'string' && value.trim().starts
 
 const isUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value).trim());
 
+const normalizeString = (value) => {
+  if (value === null || value === undefined) return null;
+  const trimmed = String(value).trim();
+  return trimmed || null;
+};
+
+const getMetadata = (body) => {
+  const raw = body?.data?.metadata ?? body?.notification?.metadata ?? body?.metadata;
+  if (!raw) return {};
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof raw === 'object' ? raw : {};
+};
+
+const extractTrackerValue = (value) => {
+  if (!value) return null;
+  if (typeof value === 'string') return normalizeString(value);
+  if (typeof value === 'object') {
+    return normalizeString(value.token ?? value.id ?? value.tracker);
+  }
+  return null;
+};
+
 const pickRequestId = (body) => {
+  const metadata = getMetadata(body);
   const candidates = [
-    body?.data?.metadata?.order_id,
-    body?.data?.metadata?.request_id,
+    metadata.order_id,
+    metadata.orderId,
+    metadata.request_id,
     body?.data?.order_id,
+    body?.data?.orderId,
     body?.notification?.metadata?.order_id,
     body?.notification?.metadata?.request_id,
     body?.metadata?.order_id,
@@ -23,32 +55,37 @@ const pickRequestId = (body) => {
   ];
 
   for (const candidate of candidates) {
-    if (candidate && String(candidate).trim()) {
-      return String(candidate).trim();
-    }
+    const normalized = normalizeString(candidate);
+    if (normalized) return normalized;
   }
 
   return null;
 };
 
 const pickPspHoldId = (body) => {
-  const tracker = body?.data?.tracker;
-
   const candidates = [
     body?.notification?.tracker,
-    typeof tracker === 'string' ? tracker : null,
-    tracker?.token,
+    body?.data?.tracker,
     body?.data?.payment?.tracker,
     body?.data?.session?.tracker,
     body?.data?.tracker_token,
+    body?.data?.token,
     body?.tracker,
-    isTrackToken(body?.data?.token) ? body.data.token : null,
-    isTrackToken(body?.token) ? body.token : null,
+    body?.token,
   ];
 
   for (const candidate of candidates) {
-    if (candidate && isTrackToken(String(candidate))) {
-      return String(candidate).trim();
+    const extracted = extractTrackerValue(candidate);
+    if (extracted && isTrackToken(extracted)) {
+      return extracted;
+    }
+  }
+
+  // Test/sandbox payloads may use non-track_* ids — still store as psp_hold_id.
+  for (const candidate of candidates) {
+    const extracted = extractTrackerValue(candidate);
+    if (extracted) {
+      return extracted;
     }
   }
 
@@ -61,7 +98,6 @@ const isEscrowLockEvent = (body) => {
     return false;
   }
 
-  // payment.succeeded / payment:created imply success by event type.
   if (type === 'payment.succeeded' || type === 'payment:created') {
     return true;
   }
@@ -74,7 +110,7 @@ const isEscrowLockEvent = (body) => {
   return true;
 };
 
-const resolveRequestIdFallback = async (psp_hold_id) => {
+const resolveRequestIdFallback = async () => {
   const { rows } = await db.query(
     `SELECT id FROM requests
      WHERE rq_status = 'payment_pending'
@@ -83,11 +119,14 @@ const resolveRequestIdFallback = async (psp_hold_id) => {
   );
 
   if (rows.length === 1) {
+    console.warn('[Safepay webhook] Using single payment_pending order fallback:', rows[0].id);
+    return rows[0].id;
+  }
+
+  if (rows.length > 1) {
     console.warn(
-      '[Safepay webhook] Using single payment_pending order fallback:',
-      rows[0].id,
-      'tracker:',
-      psp_hold_id
+      '[Safepay webhook] Multiple payment_pending orders; using most recent:',
+      rows[0].id
     );
     return rows[0].id;
   }
@@ -104,6 +143,8 @@ const escrowWebhookHandler = async (req, res) => {
     has_notification: Boolean(body.notification),
     has_data: Boolean(body.data),
     data_keys: body.data && typeof body.data === 'object' ? Object.keys(body.data) : [],
+    tracker: extractTrackerValue(body?.data?.tracker),
+    order_id: getMetadata(body).order_id ?? null,
   }));
 
   if (!isEscrowLockEvent(body)) {
@@ -119,13 +160,15 @@ const escrowWebhookHandler = async (req, res) => {
   }
 
   if (!request_id) {
-    request_id = await resolveRequestIdFallback(psp_hold_id);
+    request_id = await resolveRequestIdFallback();
   }
 
   if (!request_id) {
     console.warn('[Safepay webhook] Missing order_id. Full body:', JSON.stringify(body));
     return res.status(400).json({ error: 'Missing required tracking data from PSP.' });
   }
+
+  console.log('[Safepay webhook] locking escrow', { request_id, psp_hold_id });
 
   try {
     const { rows: requestRows } = await db.query(
@@ -151,6 +194,8 @@ const escrowWebhookHandler = async (req, res) => {
       'SELECT lock_escrow($1, $2, $3) AS result',
       [request_id, request.requester_id, psp_hold_id]
     );
+
+    console.log('[Safepay webhook] escrow locked', rows[0].result);
 
     return res.status(200).json({
       message: 'Escrow locked via Safepay Webhook.',
