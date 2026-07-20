@@ -108,6 +108,8 @@ const createHostedCheckoutUrl = async ({ tracker, requestId }) => {
     tracker,
     tbt,
     source: 'hosted',
+    order_id: requestId,
+    webhooks: true,
     redirect_url: `${appUrl}/payment/success?request_id=${requestQuery}`,
     cancel_url: `${appUrl}/payment/cancel?request_id=${requestQuery}`,
   });
