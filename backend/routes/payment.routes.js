@@ -30,13 +30,13 @@ const renderPage = (res, { title, message, requestId, tone }) => {
 </html>`);
 };
 
-// Safepay hosted checkout redirect targets (browser only — escrow locks via webhook).
+// PSP hosted checkout redirect targets (browser only — escrow locks via server callback).
 router.get('/success', (req, res) => {
   const requestId = typeof req.query.request_id === 'string' ? req.query.request_id.trim() : null;
 
   renderPage(res, {
     title: 'Payment received',
-    message: 'Your payment was submitted to Safepay. Escrow will lock automatically once Safepay confirms it — usually within a few seconds.',
+    message: 'Your payment was submitted. Escrow will lock automatically once the payment provider confirms it — usually within a few seconds.',
     requestId,
     tone: 'success',
   });

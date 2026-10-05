@@ -1,6 +1,5 @@
 const db = require('../config/db');
 const { attachSignedScreenshotUrl } = require('../utils/screenshotStorage');
-const { createPaymentTracker, createHostedCheckoutUrl } = require('../utils/safepay');
 
 const MIN_ORDER_AMOUNT_PKR = 100;
 
@@ -130,7 +129,7 @@ const cancelRequest = async (req, res) => {
 };
 
 // POST /api/requester/requests/:id/pay
-// Sara starts Safepay checkout — returns tracker + hosted checkout URL
+// Requester starts PSP checkout (Swich integration pending)
 const initiatePay = async (req, res) => {
   const requester_id = req.user.id;
   const request_id = requireRequestId(req, res);
@@ -155,33 +154,14 @@ const initiatePay = async (req, res) => {
       });
     }
 
-    const amountPaisa = request.order_amount * 100;
-    const tracker = await createPaymentTracker({
-      requestId: request_id,
-      amountPaisa,
-    });
-    const checkout_url = await createHostedCheckoutUrl({
-      tracker,
-      requestId: request_id,
-    });
-
-    return res.status(200).json({
-      message: 'Checkout session created successfully.',
+    return res.status(503).json({
+      error: 'Payment checkout is not configured yet. Swich integration pending.',
+      code: 'PSP_NOT_CONFIGURED',
       request_id,
       order_amount: request.order_amount,
-      amount_paisa: amountPaisa,
-      tracker,
-      checkout_url,
     });
   } catch (err) {
-    console.error('Safepay pay initiation failed:', err.message);
-    if (
-      err.message.includes('SAFEPAY_SECRET_KEY')
-      || err.message.includes('SAFEPAY_MERCHANT_API_KEY')
-    ) {
-      return res.status(503).json({ error: err.message });
-    }
-    return res.status(500).json({ error: 'Failed to initiate Safepay checkout.' });
+    return res.status(500).json({ error: 'Failed to initiate payment checkout.' });
   }
 };
 

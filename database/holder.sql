@@ -5,7 +5,7 @@
    Flow: get_incoming_requests → accept_request / decline_request
          → [payment_pending — PSP pay] → get_active_orders_holder → submit_tracking
          → get_request_holder → get_transaction_history_holder
-   accept_request: payout verified; 24h cooldown only after re-link (payout_relinked_at)
+   accept_request: payout_vault row verified; 24h cooldown only after re-link (payout_vault.relinked_at)
    Fees on actual saving: 5% platform, 15% holder incentive
    cancel/dispute refunds via PSP webhook before SQL seals transaction
    ───────────────────────────────────────────────────────────── */
@@ -52,6 +52,7 @@ CREATE OR REPLACE FUNCTION accept_request(
 DECLARE
   v_request RECORD;
   v_holder  RECORD;
+  v_vault   RECORD;
   v_now     BIGINT;
 BEGIN
   SELECT * INTO v_holder FROM users WHERE id = p_holder_id;
@@ -60,14 +61,16 @@ BEGIN
     RAISE EXCEPTION 'User not found.';
   END IF;
 
-  IF v_holder.payout_status != 'verified' THEN
+  SELECT * INTO v_vault FROM payout_vault WHERE user_id = p_holder_id;
+
+  IF NOT FOUND OR v_vault.verified_at IS NULL THEN
     RAISE EXCEPTION 'Link your payout account before accepting requests.';
   END IF;
 
   v_now := extract(epoch from now()) * 1000;
 
-  IF v_holder.payout_relinked_at IS NOT NULL
-     AND v_now < v_holder.payout_relinked_at + 86400000 THEN
+  IF v_vault.relinked_at IS NOT NULL
+     AND v_now < v_vault.relinked_at + 86400000 THEN
     RAISE EXCEPTION 'You can accept requests 24 hours after changing your payout account.';
   END IF;
 

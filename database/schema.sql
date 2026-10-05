@@ -16,17 +16,46 @@ CREATE TABLE IF NOT EXISTS users (
   pin_hash             TEXT,
   total_saved          INT NOT NULL DEFAULT 0,
   total_earned         INT NOT NULL DEFAULT 0,
-  psp_payee_id         VARCHAR(200),
-  payout_status        VARCHAR(20) NOT NULL DEFAULT 'none'
-                         CHECK (payout_status IN ('none', 'pending', 'verified', 'failed')),
-  payout_linked_at     BIGINT,      -- first/last successful PSP payout link
-  payout_relinked_at   BIGINT,      -- set only on re-link; 24h accept cooldown from this
   security_question    TEXT,
   security_answer_hash TEXT,
   device_id            VARCHAR(200),
   is_onboarded         INT NOT NULL DEFAULT 0,
   created_at           BIGINT NOT NULL
 );
+
+-- Payout state now lives only in payout_vault (see below). Remove legacy columns on existing DBs.
+ALTER TABLE users DROP COLUMN IF EXISTS psp_payee_id;
+ALTER TABLE users DROP COLUMN IF EXISTS payout_status;
+ALTER TABLE users DROP COLUMN IF EXISTS payout_linked_at;
+ALTER TABLE users DROP COLUMN IF EXISTS payout_relinked_at;
+
+/* ── PAYOUT VAULT ───────────────────────────────────────────── */
+-- One encrypted payout destination per user (holder receives money here).
+-- ciphertext = AES-256-GCM(account number/IBAN + account title), encrypted in Node.
+-- Database never sees plaintext account details; the key lives only in backend env.
+-- Payout state is derived from this row:
+--   no row                → none
+--   row, verified_at NULL → pending
+--   row, verified_at set  → verified
+-- relinked_at is set only when an already-verified destination is replaced
+-- (24h accept cooldown from that moment).
+CREATE TABLE IF NOT EXISTS payout_vault (
+  user_id         VARCHAR(36) PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  ciphertext      TEXT NOT NULL,
+  iv              TEXT NOT NULL,
+  auth_tag        TEXT NOT NULL,
+  key_version     INT NOT NULL DEFAULT 1,
+  channel         VARCHAR(50) NOT NULL,     -- provider code, free text (no fixed list)
+  bank_name       VARCHAR(100),
+  masked_display  VARCHAR(50) NOT NULL,     -- e.g. ****7890 (last 4 only)
+  verified_at     BIGINT,
+  relinked_at     BIGINT,
+  created_at      BIGINT NOT NULL,
+  updated_at      BIGINT NOT NULL
+);
+
+-- No client (anon/authenticated) access: backend connects with the DB owner role only.
+ALTER TABLE payout_vault ENABLE ROW LEVEL SECURITY;
 
 /* ── OTPs ───────────────────────────────────────────────────── */
 CREATE TABLE IF NOT EXISTS otps (
@@ -250,7 +279,8 @@ BEGIN
   RETURN (
     SELECT row_to_json(u)
     FROM (
-      SELECT id, phone, display_name, total_saved, total_earned, payout_status, is_onboarded
+      SELECT id, phone, display_name, total_saved, total_earned,
+             get_payout_state(id) AS payout_status, is_onboarded
       FROM users WHERE id = v_user_id
     ) u
   );
@@ -469,7 +499,8 @@ DECLARE
   v_row RECORD;
 BEGIN
   SELECT rt.user_id, rt.device_id, rt.expires_at,
-         u.phone, u.display_name, u.total_saved, u.total_earned, u.payout_status, u.is_onboarded
+         u.phone, u.display_name, u.total_saved, u.total_earned,
+         get_payout_state(u.id) AS payout_status, u.is_onboarded
   INTO v_row
   FROM refresh_tokens rt
   JOIN users u ON u.id = rt.user_id
@@ -699,7 +730,7 @@ BEGIN
       'display_name',   display_name,
       'total_saved',    total_saved,
       'total_earned',   total_earned,
-      'payout_status',  payout_status,
+      'payout_status',  get_payout_state(id),
       'is_onboarded',   is_onboarded,
       'old_device_id',  v_old_device_id
     )
@@ -987,7 +1018,8 @@ BEGIN
   RETURN (
     SELECT row_to_json(u)
     FROM (
-      SELECT id, phone, display_name, total_saved, total_earned, payout_status, is_onboarded
+      SELECT id, phone, display_name, total_saved, total_earned,
+             get_payout_state(id) AS payout_status, is_onboarded
       FROM users WHERE id = v_user.id
     ) u
   );
@@ -1155,7 +1187,8 @@ BEGIN
   RETURN (
     SELECT row_to_json(u)
     FROM (
-      SELECT id, phone, display_name, total_saved, total_earned, payout_status
+      SELECT id, phone, display_name, total_saved, total_earned,
+             get_payout_state(id) AS payout_status
       FROM users
       WHERE id = p_user_id
     ) u
@@ -1182,73 +1215,226 @@ $$ LANGUAGE plpgsql;
 
 
 /* ─────────────────────────────────────────────────────────────
-   PSP — payout linking & escrow (called from backend webhooks)
-   Real money at PSP; DB stores references + saved/earned counters only.
+   PAYOUT VAULT — holder payout destination (encrypted in Node)
+   Flow: backend verifies + encrypts → save_payout_destination → mark_payout_verified
+   Real money moves at the PSP; DB stores only ciphertext + masked display.
+   State is derived from the vault row via get_payout_state (no status column).
    ───────────────────────────────────────────────────────────── */
 
--- PSP webhook: holder completed payout onboarding
-CREATE OR REPLACE PROCEDURE set_payout_verified(
-  p_user_id      VARCHAR(36),
-  p_psp_payee_id VARCHAR(200)
+-- Legacy PSP payout procedures (replaced by the vault procedures below)
+DROP PROCEDURE IF EXISTS set_payout_verified(VARCHAR, VARCHAR);
+DROP PROCEDURE IF EXISTS set_payout_failed(VARCHAR);
+DROP PROCEDURE IF EXISTS clear_payout(VARCHAR);
+
+-- 'none' | 'pending' | 'verified' — single source of truth for payout readiness
+CREATE OR REPLACE FUNCTION get_payout_state(
+  p_user_id VARCHAR(36)
+) RETURNS VARCHAR AS $$
+DECLARE
+  v_verified_at BIGINT;
+BEGIN
+  SELECT verified_at INTO v_verified_at
+  FROM payout_vault WHERE user_id = p_user_id;
+
+  IF NOT FOUND THEN
+    RETURN 'none';
+  END IF;
+
+  IF v_verified_at IS NULL THEN
+    RETURN 'pending';
+  END IF;
+
+  RETURN 'verified';
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+
+-- True while the user (as holder) has an order that still depends on their payout destination
+CREATE OR REPLACE FUNCTION holder_has_active_order(
+  p_user_id VARCHAR(36)
+) RETURNS BOOLEAN AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM requests
+    WHERE card_holder_id = p_user_id
+    AND rq_status IN ('payment_pending', 'escrow_locked', 'tracking_submitted')
+  );
+$$ LANGUAGE sql STABLE;
+
+
+-- Backend passes already-encrypted fields. Always lands as pending (verified_at NULL);
+-- call mark_payout_verified after the title/verify step succeeds.
+-- Replacing a verified destination starts the 24h accept cooldown.
+CREATE OR REPLACE PROCEDURE save_payout_destination(
+  p_user_id        VARCHAR(36),
+  p_ciphertext     TEXT,
+  p_iv             TEXT,
+  p_auth_tag       TEXT,
+  p_key_version    INT,
+  p_channel        VARCHAR(50),
+  p_bank_name      VARCHAR(100),
+  p_masked_display VARCHAR(50)
 ) AS $$
 DECLARE
-  v_had_linked BOOLEAN;
+  v_now      BIGINT;
+  v_existing RECORD;
 BEGIN
-  IF p_psp_payee_id IS NULL OR TRIM(p_psp_payee_id) = '' THEN
-    RAISE EXCEPTION 'PSP payee id is required.';
+  IF p_ciphertext IS NULL OR TRIM(p_ciphertext) = ''
+     OR p_iv IS NULL OR TRIM(p_iv) = ''
+     OR p_auth_tag IS NULL OR TRIM(p_auth_tag) = '' THEN
+    RAISE EXCEPTION 'Encrypted payout data is required.';
   END IF;
 
-  SELECT payout_linked_at IS NOT NULL INTO v_had_linked
-  FROM users WHERE id = p_user_id;
+  IF p_channel IS NULL OR TRIM(p_channel) = '' THEN
+    RAISE EXCEPTION 'Payout channel is required.';
+  END IF;
 
-  IF NOT FOUND THEN
+  IF p_masked_display IS NULL OR TRIM(p_masked_display) = '' THEN
+    RAISE EXCEPTION 'Masked display is required.';
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id = p_user_id) THEN
     RAISE EXCEPTION 'User not found.';
   END IF;
 
-  UPDATE users
-  SET psp_payee_id       = p_psp_payee_id,
-      payout_status      = 'verified',
-      payout_linked_at   = extract(epoch from now()) * 1000,
-      payout_relinked_at = CASE
-        WHEN v_had_linked THEN extract(epoch from now()) * 1000
-        ELSE NULL
-      END
-  WHERE id = p_user_id;
+  v_now := extract(epoch from now()) * 1000;
+
+  SELECT verified_at, relinked_at INTO v_existing
+  FROM payout_vault WHERE user_id = p_user_id FOR UPDATE;
+
+  IF FOUND AND holder_has_active_order(p_user_id) THEN
+    RAISE EXCEPTION 'You cannot change your payout account while you have an active order.';
+  END IF;
+
+  INSERT INTO payout_vault (
+    user_id, ciphertext, iv, auth_tag, key_version,
+    channel, bank_name, masked_display,
+    verified_at, relinked_at, created_at, updated_at
+  ) VALUES (
+    p_user_id, p_ciphertext, p_iv, p_auth_tag, COALESCE(p_key_version, 1),
+    TRIM(p_channel), NULLIF(TRIM(COALESCE(p_bank_name, '')), ''), TRIM(p_masked_display),
+    NULL, NULL, v_now, v_now
+  )
+  ON CONFLICT (user_id) DO UPDATE
+  SET ciphertext     = EXCLUDED.ciphertext,
+      iv             = EXCLUDED.iv,
+      auth_tag       = EXCLUDED.auth_tag,
+      key_version    = EXCLUDED.key_version,
+      channel        = EXCLUDED.channel,
+      bank_name      = EXCLUDED.bank_name,
+      masked_display = EXCLUDED.masked_display,
+      verified_at    = NULL,
+      relinked_at    = CASE
+                         WHEN v_existing.verified_at IS NOT NULL THEN v_now
+                         ELSE payout_vault.relinked_at
+                       END,
+      updated_at     = v_now;
 END;
 $$ LANGUAGE plpgsql;
 
 
--- PSP webhook: holder payout verification failed
-CREATE OR REPLACE PROCEDURE set_payout_failed(
+-- Called after the verify step (title fetch) succeeds
+CREATE OR REPLACE PROCEDURE mark_payout_verified(
   p_user_id VARCHAR(36)
 ) AS $$
 BEGIN
-  UPDATE users
-  SET payout_status = 'failed'
-  WHERE id = p_user_id;
+  UPDATE payout_vault
+  SET verified_at = extract(epoch from now()) * 1000,
+      updated_at  = extract(epoch from now()) * 1000
+  WHERE user_id = p_user_id;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'User not found.';
+    RAISE EXCEPTION 'No payout account to verify. Link a payout account first.';
   END IF;
 END;
 $$ LANGUAGE plpgsql;
 
 
--- Before re-link: mark pending until new PSP webhook confirms
-CREATE OR REPLACE PROCEDURE clear_payout(
+-- Holder removes their payout destination (blocked while an order depends on it)
+CREATE OR REPLACE PROCEDURE remove_payout(
   p_user_id VARCHAR(36)
 ) AS $$
 BEGIN
-  UPDATE users
-  SET psp_payee_id  = NULL,
-      payout_status = 'pending'
-  WHERE id = p_user_id;
+  IF holder_has_active_order(p_user_id) THEN
+    RAISE EXCEPTION 'You cannot remove your payout account while you have an active order.';
+  END IF;
+
+  DELETE FROM payout_vault WHERE user_id = p_user_id;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'User not found.';
+    RAISE EXCEPTION 'No payout account linked.';
   END IF;
 END;
 $$ LANGUAGE plpgsql;
+
+
+-- Safe for API responses: never returns ciphertext, iv, or auth tag
+CREATE OR REPLACE FUNCTION get_payout_public(
+  p_user_id VARCHAR(36)
+) RETURNS JSON AS $$
+BEGIN
+  RETURN json_build_object(
+    'payout_status',  get_payout_state(p_user_id),
+    'channel',        (SELECT channel FROM payout_vault WHERE user_id = p_user_id),
+    'bank_name',      (SELECT bank_name FROM payout_vault WHERE user_id = p_user_id),
+    'masked_display', (SELECT masked_display FROM payout_vault WHERE user_id = p_user_id),
+    'verified_at',    (SELECT verified_at FROM payout_vault WHERE user_id = p_user_id),
+    'relinked_at',    (SELECT relinked_at FROM payout_vault WHERE user_id = p_user_id)
+  );
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+
+-- Backend-only: encrypted row for payout decryption. Never expose through an API route.
+CREATE OR REPLACE FUNCTION get_payout_ciphertext(
+  p_user_id VARCHAR(36)
+) RETURNS JSON AS $$
+BEGIN
+  RETURN (
+    SELECT row_to_json(v)
+    FROM (
+      SELECT ciphertext, iv, auth_tag, key_version, channel, bank_name
+      FROM payout_vault
+      WHERE user_id = p_user_id
+      AND verified_at IS NOT NULL
+    ) v
+  );
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+
+-- Lock sensitive vault functions to the DB owner role (backend). No PostgREST/anon access.
+DO $$
+DECLARE
+  r   RECORD;
+  rol TEXT;
+BEGIN
+  FOR r IN
+    SELECT p.oid::regprocedure AS sig,
+           CASE WHEN p.prokind = 'p' THEN 'PROCEDURE' ELSE 'FUNCTION' END AS kind
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+    AND p.proname IN (
+      'save_payout_destination', 'mark_payout_verified', 'remove_payout',
+      'get_payout_public', 'get_payout_ciphertext'
+    )
+  LOOP
+    EXECUTE format('REVOKE ALL ON %s %s FROM PUBLIC', r.kind, r.sig);
+    FOREACH rol IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = rol) THEN
+        EXECUTE format('REVOKE ALL ON %s %s FROM %I', r.kind, r.sig, rol);
+      END IF;
+    END LOOP;
+  END LOOP;
+
+  FOREACH rol IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = rol) THEN
+      EXECUTE format('REVOKE ALL ON TABLE payout_vault FROM %I', rol);
+    END IF;
+  END LOOP;
+END;
+$$;
+
 
 
 /* ─────────────────────────────────────────────────────────────
@@ -1283,9 +1469,8 @@ BEGIN
         cards.card_tier,
         cards.allow_sharing,
         cards.created_at,
-        u.payout_status
+        get_payout_state(cards.user_id) AS payout_status
       FROM cards
-      JOIN users u ON u.id = cards.user_id
       WHERE cards.user_id = p_user_id
     ) c
   );
@@ -1461,10 +1646,9 @@ BEGIN
     FROM (
       SELECT cards.id, cards.bank_name, cards.card_type, cards.card_tier
       FROM cards
-      JOIN users u ON u.id = cards.user_id
       WHERE cards.user_id = p_friend_id
       AND cards.allow_sharing = 1
-      AND u.payout_status = 'verified'
+      AND get_payout_state(cards.user_id) = 'verified'
     ) c
   );
 END;

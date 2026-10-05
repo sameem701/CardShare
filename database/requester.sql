@@ -45,11 +45,7 @@ BEGIN
     RAISE EXCEPTION 'This user is not in your circle.';
   END IF;
 
-  IF NOT EXISTS (
-    SELECT 1 FROM users
-    WHERE id = p_card_holder_id
-    AND payout_status = 'verified'
-  ) THEN
+  IF get_payout_state(p_card_holder_id) != 'verified' THEN
     RAISE EXCEPTION 'This card holder has not linked a payout account yet.';
   END IF;
 

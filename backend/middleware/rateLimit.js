@@ -28,8 +28,19 @@ const pinVerifyLimiter = rateLimit({
   handler: rateLimitResponse,
 });
 
+// Keyed per logged-in user (must run after auth middleware)
+const payoutLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: (req) => req.user.id,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitResponse,
+});
+
 module.exports = {
   otpSendLimiter,
   otpVerifyLimiter,
   pinVerifyLimiter,
+  payoutLimiter,
 };

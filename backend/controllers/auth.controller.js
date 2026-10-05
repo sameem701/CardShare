@@ -184,7 +184,8 @@ const verifyPin = async (req, res) => {
     await db.query('CALL assert_pin_phone_allowed($1)', [phone]);
 
     const { rows } = await db.query(
-      `SELECT id, phone, display_name, total_saved, total_earned, payout_status,
+      `SELECT id, phone, display_name, total_saved, total_earned,
+              get_payout_state(id) AS payout_status,
               is_onboarded, pin_hash, device_id
        FROM users WHERE phone = $1`,
       [phone]
