@@ -146,16 +146,12 @@ CREATE INDEX IF NOT EXISTS idx_chat_request        ON chat_messages(request_id);
 
 /* ─────────────────────────────────────────────────────────────
    AUTH
-   Flow: store_otp → verify_otp (login + bind_device, revokes old refresh)
+   Flow: store_otp → verify_otp (creates the user if new)
          OTP limits: 60s cooldown, 1 resend, 3 tries/code, 6 fails/round → otp_phone_lockout
          Success clears otp_phone_lockout row for that phone
-         → get_login_status → PIN screen → verify_pin (bcrypt in Node + pin_phone_lockout)
-         PIN limits: 4 fails/round → pin_phone_lockout; success deletes that row
-         Forgot PIN (known device): security Q → pin_reset_grants → new PIN
-         Security answer: 3 fails → security_answer_lockout permanent
-         → backend issues access JWT (~5 min) + create_session + store_refresh_token (~30 days)
-         → auth middleware: session row + X-Device-Id vs users.device_id
-         → validate_refresh_token / rotate_refresh_token on /auth/refresh (same session_id)
+         → backend calls create_session
+         → auth checks the session row with validate_session
+         Setup is update_profile. A null display_name means the name is not set.
    ───────────────────────────────────────────────────────────── */
 
 -- Internal helper — creates user row on first OTP verification
@@ -177,8 +173,7 @@ BEGIN
   RETURN (
     SELECT row_to_json(u)
     FROM (
-      SELECT id, phone, display_name, total_saved, total_earned,
-             get_payout_state(id) AS payout_status, is_onboarded
+      SELECT id, phone, display_name, created_at
       FROM users WHERE id = v_user_id
     ) u
   );
@@ -245,14 +240,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Deletes the refresh token for a user — bind_device (new phone OTP)
-CREATE OR REPLACE PROCEDURE revoke_refresh_tokens(
-  p_user_id VARCHAR(36)
-) AS $$
-BEGIN
-  DELETE FROM refresh_tokens WHERE user_id = p_user_id;
-END;
-$$ LANGUAGE plpgsql;
+
 
 
 -- Replaces any existing session for this user (one active session per user)
@@ -279,34 +267,21 @@ $$ LANGUAGE plpgsql;
 
 
 -- Session row must exist; device_id checked against users.device_id (not stored on sessions)
+-- Replaces the old 3-arg form that also checked device_id.
+DROP FUNCTION IF EXISTS validate_session(VARCHAR, VARCHAR, VARCHAR);
+
 CREATE OR REPLACE FUNCTION validate_session(
   p_session_id VARCHAR(36),
-  p_user_id    VARCHAR(36),
-  p_device_id  VARCHAR(200)
+  p_user_id    VARCHAR(36)
 ) RETURNS JSON AS $$
 DECLARE
   v_session RECORD;
-  v_user    RECORD;
 BEGIN
-  IF p_device_id IS NULL OR p_device_id = '' THEN
-    RAISE EXCEPTION 'device_id is required.';
-  END IF;
-
   SELECT * INTO v_session FROM sessions
   WHERE id = p_session_id AND user_id = p_user_id;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Session revoked. Please log in again.';
-  END IF;
-
-  SELECT * INTO v_user FROM users WHERE id = p_user_id;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'User not found.';
-  END IF;
-
-  IF v_user.device_id IS NULL OR v_user.device_id != p_device_id THEN
-    RAISE EXCEPTION 'Unrecognised device. Please log in again.';
   END IF;
 
   RETURN json_build_object(
@@ -335,7 +310,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Explicit logout: revoke refresh + delete session(s); device binding kept (next open → PIN)
+-- Explicit logout: delete this user's session.
 CREATE OR REPLACE PROCEDURE logout_user(
   p_user_id VARCHAR(36)
 ) AS $$
@@ -345,197 +320,31 @@ BEGIN
   END IF;
 
   CALL revoke_user_sessions(p_user_id);
-  CALL revoke_refresh_tokens(p_user_id);
 END;
 $$ LANGUAGE plpgsql;
 
 
--- Called by backend after OTP/PIN login — replaces any existing row for this user
-CREATE OR REPLACE FUNCTION store_refresh_token(
-  p_user_id    VARCHAR(36),
-  p_device_id  VARCHAR(200),
-  p_token_hash TEXT,
-  p_expires_at BIGINT
-) RETURNS JSON AS $$
-DECLARE
-  v_id VARCHAR(36);
-BEGIN
-  IF p_token_hash IS NULL OR p_token_hash = '' THEN
-    RAISE EXCEPTION 'Token hash cannot be empty.';
-  END IF;
 
-  IF NOT EXISTS (
-    SELECT 1 FROM users WHERE id = p_user_id AND device_id = p_device_id
-  ) THEN
-    RAISE EXCEPTION 'Device does not match the bound device for this user.';
-  END IF;
+-- User submits OTP — checks expiry, attempt limit, then hash.
+-- On success: creates the user if new and returns id, phone, display_name, created_at.
+-- The backend then calls create_session.
+DROP FUNCTION IF EXISTS verify_otp(VARCHAR, TEXT, VARCHAR);
 
-  DELETE FROM refresh_tokens WHERE user_id = p_user_id;
-
-  v_id := uuid_generate_v4()::varchar;
-
-  INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at, created_at)
-  VALUES (
-    v_id, p_user_id, p_device_id, p_token_hash, p_expires_at,
-    extract(epoch from now()) * 1000
-  );
-
-  RETURN json_build_object(
-    'id',         v_id,
-    'expires_at', p_expires_at
-  );
-END;
-$$ LANGUAGE plpgsql;
-
-
--- Validates refresh token + device; returns user fields for new access JWT
-CREATE OR REPLACE FUNCTION validate_refresh_token(
-  p_token_hash TEXT,
-  p_device_id  VARCHAR(200)
-) RETURNS JSON AS $$
-DECLARE
-  v_row RECORD;
-BEGIN
-  SELECT rt.user_id, rt.device_id, rt.expires_at,
-         u.phone, u.display_name, u.total_saved, u.total_earned,
-         get_payout_state(u.id) AS payout_status, u.is_onboarded
-  INTO v_row
-  FROM refresh_tokens rt
-  JOIN users u ON u.id = rt.user_id
-  WHERE rt.token_hash = p_token_hash;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Invalid refresh token.';
-  END IF;
-
-  IF (extract(epoch from now()) * 1000) > v_row.expires_at THEN
-    DELETE FROM refresh_tokens WHERE token_hash = p_token_hash;
-    RAISE EXCEPTION 'Refresh token has expired.';
-  END IF;
-
-  IF v_row.device_id != p_device_id THEN
-    RAISE EXCEPTION 'Device does not match refresh token.';
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1 FROM users WHERE id = v_row.user_id AND device_id = p_device_id
-  ) THEN
-    DELETE FROM refresh_tokens WHERE user_id = v_row.user_id;
-    RAISE EXCEPTION 'Session revoked. Please log in again.';
-  END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM sessions WHERE user_id = v_row.user_id) THEN
-    DELETE FROM refresh_tokens WHERE user_id = v_row.user_id;
-    RAISE EXCEPTION 'Session revoked. Please log in again.';
-  END IF;
-
-  RETURN json_build_object(
-    'user_id',        v_row.user_id,
-    'session_id',     (SELECT id FROM sessions WHERE user_id = v_row.user_id),
-    'device_id',      v_row.device_id,
-    'phone',          v_row.phone,
-    'display_name',   v_row.display_name,
-    'total_saved',    v_row.total_saved,
-    'total_earned',   v_row.total_earned,
-    'payout_status',  v_row.payout_status,
-    'is_onboarded',   v_row.is_onboarded
-  );
-END;
-$$ LANGUAGE plpgsql;
-
-
--- Rotation: validate old token, replace with new (store_refresh_token clears prior row for user)
-CREATE OR REPLACE FUNCTION rotate_refresh_token(
-  p_old_token_hash TEXT,
-  p_new_token_hash TEXT,
-  p_device_id      VARCHAR(200),
-  p_expires_at     BIGINT
-) RETURNS JSON AS $$
-DECLARE
-  v_valid JSON;
-  v_store JSON;
-BEGIN
-  v_valid := validate_refresh_token(p_old_token_hash, p_device_id);
-
-  v_store := store_refresh_token(
-    v_valid->>'user_id', p_device_id, p_new_token_hash, p_expires_at
-  );
-
-  RETURN json_build_object(
-    'expires_at',     v_store->'expires_at',
-    'user_id',        v_valid->'user_id',
-    'session_id',     v_valid->'session_id',
-    'phone',          v_valid->'phone',
-    'display_name',   v_valid->'display_name',
-    'total_saved',    v_valid->'total_saved',
-    'total_earned',   v_valid->'total_earned',
-    'payout_status',  v_valid->'payout_status',
-    'is_onboarded',   v_valid->'is_onboarded',
-    'device_id',      v_valid->'device_id'
-  );
-END;
-$$ LANGUAGE plpgsql;
-
-
--- Binds this physical device to the user — called inside verify_otp
--- Does not set is_onboarded — that happens at complete_onboarding
--- Returns previous device_id (NULL for brand new users) for optional FCM kick
-CREATE OR REPLACE FUNCTION bind_device(
-  p_user_id   VARCHAR(36),
-  p_device_id VARCHAR(200)
-) RETURNS VARCHAR AS $$
-DECLARE
-  v_old_device_id VARCHAR(200);
-BEGIN
-  IF p_device_id IS NULL OR p_device_id = '' THEN
-    RAISE EXCEPTION 'Device ID cannot be empty.';
-  END IF;
-
-  SELECT device_id INTO v_old_device_id
-  FROM users WHERE id = p_user_id;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'User not found.';
-  END IF;
-
-  UPDATE users
-  SET device_id = p_device_id
-  WHERE id = p_user_id;
-
-  CALL revoke_user_sessions(p_user_id);
-  -- Old phone refresh tokens must not renew access after a new device OTP login
-  CALL revoke_refresh_tokens(p_user_id);
-
-  RETURN v_old_device_id;
-END;
-$$ LANGUAGE plpgsql;
-
-
--- User submits OTP — checks expiry, attempt limit, then hash
--- On success: creates user if new, binds device_id, returns user + old_device_id
--- is_onboarded = 0 → backend issues session tokens; app routes to profile → pin → complete_onboarding
--- is_onboarded = 1 → backend returns requires_pin (no session); app shows PIN entry → pin/verify
 CREATE OR REPLACE FUNCTION verify_otp(
-  p_phone     VARCHAR(20),
-  p_otp_hash  TEXT,
-  p_device_id VARCHAR(200)
+  p_phone    VARCHAR(20),
+  p_otp_hash TEXT
 ) RETURNS JSON AS $$
 DECLARE
-  v_otp           RECORD;
-  v_user          JSON;
-  v_user_id       VARCHAR(36);
-  v_old_device_id VARCHAR(200);
-  v_lock          RECORD;
-  v_now           BIGINT;
-  v_fail_count    INT;
-  v_round         INT;
-  v_days          INT;
-  v_until         BIGINT;
+  v_otp        RECORD;
+  v_user       JSON;
+  v_user_id    VARCHAR(36);
+  v_lock       RECORD;
+  v_now        BIGINT;
+  v_fail_count INT;
+  v_round      INT;
+  v_days       INT;
+  v_until      BIGINT;
 BEGIN
-  IF p_device_id IS NULL OR p_device_id = '' THEN
-    RAISE EXCEPTION 'Device ID cannot be empty.';
-  END IF;
-
   v_now := extract(epoch from now()) * 1000;
 
   SELECT * INTO v_lock FROM otp_phone_lockout WHERE phone = p_phone;
@@ -614,23 +423,17 @@ BEGIN
   END IF;
 
   DELETE FROM otps WHERE phone = p_phone;
-
   DELETE FROM otp_phone_lockout WHERE phone = p_phone;
 
   v_user := login_or_create_user(p_phone);
   v_user_id := (v_user->>'id');
-  v_old_device_id := bind_device(v_user_id, p_device_id);
 
   RETURN (
     SELECT json_build_object(
-      'id',             id,
-      'phone',          phone,
-      'display_name',   display_name,
-      'total_saved',    total_saved,
-      'total_earned',   total_earned,
-      'payout_status',  get_payout_state(id),
-      'is_onboarded',   is_onboarded,
-      'old_device_id',  v_old_device_id
+      'id',           id,
+      'phone',        phone,
+      'display_name', display_name,
+      'created_at',   created_at
     )
     FROM users WHERE id = v_user_id
   );
@@ -638,65 +441,28 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Called silently by the app on startup using phone + UUID from secure storage
--- Decides which screen to show without the user doing anything
---   new_user     → phone not in DB → show phone screen → OTP → onboarding
---   new_device   → phone exists, device unknown → show phone screen → OTP (binds device)
---   known_device → phone and device match → go straight to PIN screen
-CREATE OR REPLACE FUNCTION get_login_status(
-  p_phone     VARCHAR(20),
-  p_device_id VARCHAR(200)
-) RETURNS JSON AS $$
-DECLARE
-  v_user RECORD;
-BEGIN
-  SELECT * INTO v_user FROM users WHERE phone = p_phone;
-
-  IF NOT FOUND THEN
-    RETURN json_build_object('status', 'new_user');
-  END IF;
-
-  -- NULL safe: if either side is NULL this condition is false, falls through to new_device
-  IF v_user.device_id IS NOT NULL AND v_user.device_id = p_device_id THEN
-    RETURN json_build_object(
-      'status',            'known_device',
-      'user_id',           v_user.id,
-      'has_pin',           (v_user.pin_hash IS NOT NULL),
-      'is_onboarded',      v_user.is_onboarded,
-      'has_valid_refresh', EXISTS (
-        SELECT 1 FROM refresh_tokens
-        WHERE user_id = v_user.id
-        AND device_id = p_device_id
-        AND expires_at > (extract(epoch from now()) * 1000)
-      ),
-      'has_active_session', EXISTS (
-        SELECT 1 FROM sessions WHERE user_id = v_user.id
-      )
-    );
-  END IF;
-
-  -- Security question check removed — NOT IN MVP
-  RETURN json_build_object(
-    'status', 'new_device'
-  );
-END;
-$$ LANGUAGE plpgsql;
-
 
 /* ─────────────────────────────────────────────────────────────
-   ONBOARDING
-   Device is bound at verify_otp. Brand new users then:
-   update_profile → upsert_pin → upsert_security_question → complete_onboarding
+   PROFILE
+   Setup is the display name. A null display_name means it is not set.
    ───────────────────────────────────────────────────────────── */
 
--- Step 1 — user sets their display name
+-- User sets their display name. A blank name is rejected.
 CREATE OR REPLACE PROCEDURE update_profile(
   p_user_id      VARCHAR(36),
   p_display_name VARCHAR(100)
 ) AS $$
+DECLARE
+  v_name VARCHAR(100);
 BEGIN
+  v_name := TRIM(p_display_name);
+
+  IF v_name IS NULL OR v_name = '' THEN
+    RAISE EXCEPTION 'Display name is required.';
+  END IF;
+
   UPDATE users
-  SET display_name = p_display_name
+  SET display_name = v_name
   WHERE id = p_user_id;
 
   IF NOT FOUND THEN
@@ -706,378 +472,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Step 2 — user sets PIN (also used in forgot PIN reset flow)
-CREATE OR REPLACE PROCEDURE upsert_pin(
-  p_user_id  VARCHAR(36),
-  p_pin_hash TEXT
-) AS $$
-BEGIN
-  UPDATE users
-  SET pin_hash = p_pin_hash
-  WHERE id = p_user_id;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'User not found.';
-  END IF;
-END;
-$$ LANGUAGE plpgsql;
-
-
--- Step 3 — user sets security question + answer hash (answer hashed in Node with bcrypt)
-CREATE OR REPLACE PROCEDURE upsert_security_question(
-  p_user_id      VARCHAR(36),
-  p_question     TEXT,
-  p_answer_hash  TEXT
-) AS $$
-BEGIN
-  IF p_question IS NULL OR TRIM(p_question) = '' THEN
-    RAISE EXCEPTION 'Security question is required.';
-  END IF;
-
-  IF p_answer_hash IS NULL OR p_answer_hash = '' THEN
-    RAISE EXCEPTION 'Security answer hash is required.';
-  END IF;
-
-  UPDATE users
-  SET security_question    = TRIM(p_question),
-      security_answer_hash = p_answer_hash
-  WHERE id = p_user_id;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'User not found.';
-  END IF;
-END;
-$$ LANGUAGE plpgsql;
-
-
--- Step 4 — final onboarding step (device already bound at OTP verify)
-CREATE OR REPLACE FUNCTION complete_onboarding(
-  p_user_id VARCHAR(36)
-) RETURNS JSON AS $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM users
-    WHERE id = p_user_id
-    AND pin_hash IS NOT NULL
-    AND display_name IS NOT NULL
-    AND TRIM(display_name) != ''
-    AND security_question IS NOT NULL
-    AND TRIM(security_question) != ''
-    AND security_answer_hash IS NOT NULL
-  ) THEN
-    RAISE EXCEPTION 'Profile, PIN, and security question must be set before completing onboarding.';
-  END IF;
-
-  UPDATE users
-  SET is_onboarded = 1
-  WHERE id = p_user_id;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'User not found.';
-  END IF;
-
-  RETURN json_build_object(
-    'user_id',      p_user_id,
-    'is_onboarded', 1
-  );
-END;
-$$ LANGUAGE plpgsql;
-
-
-/* ─────────────────────────────────────────────────────────────
-   RETURNING USER LOGIN
-   get_login_status returns known_device → PIN screen → verify_pin (backend + lockout procs)
-   ───────────────────────────────────────────────────────────── */
-
--- Reject PIN verify when this phone is temp- or permanently blocked
-CREATE OR REPLACE PROCEDURE assert_pin_phone_allowed(
-  p_phone VARCHAR(20)
-) AS $$
-DECLARE
-  v_now  BIGINT;
-  v_lock RECORD;
-BEGIN
-  v_now := extract(epoch from now()) * 1000;
-
-  SELECT * INTO v_lock FROM pin_phone_lockout WHERE phone = p_phone;
-
-  IF NOT FOUND THEN
-    RETURN;
-  END IF;
-
-  IF v_lock.permanently_blocked = 1 THEN
-    RAISE EXCEPTION 'OTP_CONTACT_SUPPORT';
-  END IF;
-
-  IF v_lock.blocked_until IS NOT NULL AND v_lock.blocked_until > v_now THEN
-    RAISE EXCEPTION 'OTP_LOCKED:%', v_lock.blocked_until;
-  END IF;
-END;
-$$ LANGUAGE plpgsql;
-
-
--- Called by backend after a wrong PIN (bcrypt compare in Node)
-CREATE OR REPLACE PROCEDURE record_pin_fail(
-  p_phone VARCHAR(20)
-) AS $$
-DECLARE
-  v_now        BIGINT;
-  v_fail_count INT;
-  v_round      INT;
-  v_days       INT;
-  v_until      BIGINT;
-BEGIN
-  v_now := extract(epoch from now()) * 1000;
-
-  INSERT INTO pin_phone_lockout (phone, pin_fail_count, fail_round, permanently_blocked)
-  VALUES (p_phone, 0, 0, 0)
-  ON CONFLICT (phone) DO NOTHING;
-
-  UPDATE pin_phone_lockout
-  SET pin_fail_count = pin_fail_count + 1
-  WHERE phone = p_phone
-  RETURNING pin_fail_count, fail_round INTO v_fail_count, v_round;
-
-  IF v_fail_count >= 4 THEN
-    v_round := v_round + 1;
-
-    IF v_round >= 5 THEN
-      UPDATE pin_phone_lockout
-      SET fail_round          = v_round,
-          pin_fail_count      = 0,
-          blocked_until       = NULL,
-          permanently_blocked = 1
-      WHERE phone = p_phone;
-
-      RAISE EXCEPTION 'OTP_CONTACT_SUPPORT';
-    END IF;
-
-    v_days := CASE v_round
-      WHEN 1 THEN 1
-      WHEN 2 THEN 2
-      WHEN 3 THEN 4
-      WHEN 4 THEN 10
-      ELSE 10
-    END;
-
-    v_until := v_now + (v_days::bigint * 86400000);
-
-    UPDATE pin_phone_lockout
-    SET fail_round          = v_round,
-        pin_fail_count      = 0,
-        blocked_until       = v_until,
-        permanently_blocked = 0
-    WHERE phone = p_phone;
-
-    RAISE EXCEPTION 'OTP_LOCKED:%', v_until;
-  END IF;
-END;
-$$ LANGUAGE plpgsql;
-
-
--- Called by backend after successful PIN verify — lockout no longer applies
-CREATE OR REPLACE PROCEDURE clear_pin_phone_lockout(
-  p_phone VARCHAR(20)
-) AS $$
-BEGIN
-  DELETE FROM pin_phone_lockout WHERE phone = p_phone;
-END;
-$$ LANGUAGE plpgsql;
-
-
--- Legacy DB PIN compare (plain hash) — not used by backend; bcrypt.compare in auth.controller.js
--- Lockout: assert_pin_phone_allowed → record_pin_fail / clear_pin_phone_lockout
-CREATE OR REPLACE FUNCTION verify_pin(
-  p_phone     VARCHAR(20),
-  p_pin_hash  TEXT,
-  p_device_id VARCHAR(200)
-) RETURNS JSON AS $$
-DECLARE
-  v_user RECORD;
-BEGIN
-  SELECT * INTO v_user FROM users WHERE phone = p_phone;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'User not found.';
-  END IF;
-
-  IF v_user.pin_hash IS NULL THEN
-    RAISE EXCEPTION 'PIN not set. Please complete registration.';
-  END IF;
-
-  IF v_user.device_id IS NULL OR v_user.device_id != p_device_id THEN
-    RAISE EXCEPTION 'Unrecognised device. Please verify your phone number.';
-  END IF;
-
-  IF v_user.pin_hash != p_pin_hash THEN
-    RAISE EXCEPTION 'Invalid PIN.';
-  END IF;
-
-  RETURN (
-    SELECT row_to_json(u)
-    FROM (
-      SELECT id, phone, display_name, total_saved, total_earned,
-             get_payout_state(id) AS payout_status, is_onboarded
-      FROM users WHERE id = v_user.id
-    ) u
-  );
-END;
-$$ LANGUAGE plpgsql;
-
-
-/* ─────────────────────────────────────────────────────────────
-   FORGOT PIN (known device only)
-   get_forgot_pin_question → verify answer in Node (bcrypt)
-   → create_pin_reset_grant → complete_forgot_pin_reset
-   New device recovery → OTP only (unchanged).
-   ───────────────────────────────────────────────────────────── */
-
--- Reject if security answer attempts exhausted (3 fails → permanent)
-CREATE OR REPLACE PROCEDURE assert_security_answer_allowed(
-  p_phone VARCHAR(20)
-) AS $$
-DECLARE
-  v_lock RECORD;
-BEGIN
-  SELECT * INTO v_lock FROM security_answer_lockout WHERE phone = p_phone;
-
-  IF NOT FOUND THEN
-    RETURN;
-  END IF;
-
-  IF v_lock.permanently_blocked = 1 THEN
-    RAISE EXCEPTION 'OTP_CONTACT_SUPPORT';
-  END IF;
-END;
-$$ LANGUAGE plpgsql;
-
-
--- Wrong security answer — 3rd fail permanently blocks (contact support)
-CREATE OR REPLACE PROCEDURE record_security_answer_fail(
-  p_phone VARCHAR(20)
-) AS $$
-DECLARE
-  v_count INT;
-BEGIN
-  INSERT INTO security_answer_lockout (phone, fail_count, permanently_blocked)
-  VALUES (p_phone, 0, 0)
-  ON CONFLICT (phone) DO NOTHING;
-
-  UPDATE security_answer_lockout
-  SET fail_count = fail_count + 1
-  WHERE phone = p_phone
-  RETURNING fail_count INTO v_count;
-
-  IF v_count >= 3 THEN
-    UPDATE security_answer_lockout
-    SET permanently_blocked = 1
-    WHERE phone = p_phone;
-
-    RAISE EXCEPTION 'OTP_CONTACT_SUPPORT';
-  END IF;
-END;
-$$ LANGUAGE plpgsql;
-
-
--- After correct answer — 15 minute window to set a new PIN (overwrites prior grant)
-CREATE OR REPLACE PROCEDURE create_pin_reset_grant(
-  p_phone VARCHAR(20)
-) AS $$
-DECLARE
-  v_now BIGINT;
-BEGIN
-  v_now := extract(epoch from now()) * 1000;
-
-  DELETE FROM security_answer_lockout WHERE phone = p_phone;
-
-  INSERT INTO pin_reset_grants (phone, expires_at, created_at)
-  VALUES (p_phone, v_now + 900000, v_now)
-  ON CONFLICT (phone) DO UPDATE
-  SET expires_at = EXCLUDED.expires_at,
-      created_at = EXCLUDED.created_at;
-END;
-$$ LANGUAGE plpgsql;
-
-
--- Step 1 of forgot PIN — returns question text for known device
-CREATE OR REPLACE FUNCTION get_forgot_pin_question(
-  p_phone     VARCHAR(20),
-  p_device_id VARCHAR(200)
-) RETURNS JSON AS $$
-DECLARE
-  v_user RECORD;
-BEGIN
-  CALL assert_security_answer_allowed(p_phone);
-
-  SELECT * INTO v_user FROM users WHERE phone = p_phone;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'User not found.';
-  END IF;
-
-  IF v_user.pin_hash IS NULL THEN
-    RAISE EXCEPTION 'PIN not set. Please complete registration.';
-  END IF;
-
-  IF v_user.device_id IS NULL OR v_user.device_id != p_device_id THEN
-    RAISE EXCEPTION 'Unrecognised device. Please verify your phone number.';
-  END IF;
-
-  IF v_user.security_question IS NULL OR TRIM(v_user.security_question) = ''
-     OR v_user.security_answer_hash IS NULL THEN
-    RAISE EXCEPTION 'Security question not set.';
-  END IF;
-
-  RETURN json_build_object('security_question', v_user.security_question);
-END;
-$$ LANGUAGE plpgsql;
-
-
--- Step 3 of forgot PIN — valid grant + device match → new PIN, cleanup, revoke refresh
-CREATE OR REPLACE PROCEDURE complete_forgot_pin_reset(
-  p_phone      VARCHAR(20),
-  p_device_id  VARCHAR(200),
-  p_pin_hash   TEXT
-) AS $$
-DECLARE
-  v_now  BIGINT;
-  v_user RECORD;
-  v_grant RECORD;
-BEGIN
-  v_now := extract(epoch from now()) * 1000;
-
-  SELECT * INTO v_user FROM users WHERE phone = p_phone;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'User not found.';
-  END IF;
-
-  IF v_user.device_id IS NULL OR v_user.device_id != p_device_id THEN
-    RAISE EXCEPTION 'Unrecognised device. Please verify your phone number.';
-  END IF;
-
-  SELECT * INTO v_grant FROM pin_reset_grants WHERE phone = p_phone;
-
-  IF NOT FOUND OR v_now >= v_grant.expires_at THEN
-    RAISE EXCEPTION 'PIN reset window expired. Please verify your security answer again.';
-  END IF;
-
-  UPDATE users SET pin_hash = p_pin_hash WHERE id = v_user.id;
-
-  DELETE FROM pin_reset_grants WHERE phone = p_phone;
-  DELETE FROM pin_phone_lockout WHERE phone = p_phone;
-
-  CALL revoke_user_sessions(v_user.id);
-  CALL revoke_refresh_tokens(v_user.id);
-END;
-$$ LANGUAGE plpgsql;
-
-
-/* ─────────────────────────────────────────────────────────────
-   PROFILE
-   ───────────────────────────────────────────────────────────── */
-
--- Returns user's own profile including saved/earned counters and payout status
+-- Returns the user row. A null display_name means setup is unfinished.
 CREATE OR REPLACE FUNCTION get_profile(
   p_user_id VARCHAR(36)
 ) RETURNS JSON AS $$
@@ -1085,14 +480,14 @@ BEGIN
   RETURN (
     SELECT row_to_json(u)
     FROM (
-      SELECT id, phone, display_name, total_saved, total_earned,
-             get_payout_state(id) AS payout_status
+      SELECT id, phone, display_name, created_at
       FROM users
       WHERE id = p_user_id
     ) u
   );
 END;
 $$ LANGUAGE plpgsql;
+
 
 
 -- Looks up a user by phone before adding them to circle
