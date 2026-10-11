@@ -266,8 +266,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Session row must exist; device_id checked against users.device_id (not stored on sessions)
--- Replaces the old 3-arg form that also checked device_id.
+-- Session row must match this session id and user id.
+-- Drops the old 3-arg form so a re-run does not leave two copies.
 DROP FUNCTION IF EXISTS validate_session(VARCHAR, VARCHAR, VARCHAR);
 
 CREATE OR REPLACE FUNCTION validate_session(
@@ -508,229 +508,6 @@ $$ LANGUAGE plpgsql;
 
 
 /* ─────────────────────────────────────────────────────────────
-   PAYOUT VAULT — holder payout destination (encrypted in Node)
-   Flow: backend verifies + encrypts → save_payout_destination → mark_payout_verified
-   Real money moves at the PSP; DB stores only ciphertext + masked display.
-   State is derived from the vault row via get_payout_state (no status column).
-   ───────────────────────────────────────────────────────────── */
-
--- Legacy PSP payout procedures (replaced by the vault procedures below)
-DROP PROCEDURE IF EXISTS set_payout_verified(VARCHAR, VARCHAR);
-DROP PROCEDURE IF EXISTS set_payout_failed(VARCHAR);
-DROP PROCEDURE IF EXISTS clear_payout(VARCHAR);
-
--- 'none' | 'pending' | 'verified' — single source of truth for payout readiness
-CREATE OR REPLACE FUNCTION get_payout_state(
-  p_user_id VARCHAR(36)
-) RETURNS VARCHAR AS $$
-DECLARE
-  v_verified_at BIGINT;
-BEGIN
-  SELECT verified_at INTO v_verified_at
-  FROM payout_vault WHERE user_id = p_user_id;
-
-  IF NOT FOUND THEN
-    RETURN 'none';
-  END IF;
-
-  IF v_verified_at IS NULL THEN
-    RETURN 'pending';
-  END IF;
-
-  RETURN 'verified';
-END;
-$$ LANGUAGE plpgsql STABLE;
-
-
--- True while the user (as holder) has an order that still depends on their payout destination
-CREATE OR REPLACE FUNCTION holder_has_active_order(
-  p_user_id VARCHAR(36)
-) RETURNS BOOLEAN AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM requests
-    WHERE card_holder_id = p_user_id
-    AND rq_status IN ('payment_pending', 'escrow_locked', 'tracking_submitted')
-  );
-$$ LANGUAGE sql STABLE;
-
-
--- Backend passes already-encrypted fields. Always lands as pending (verified_at NULL);
--- call mark_payout_verified after the title/verify step succeeds.
--- Replacing a verified destination starts the 24h accept cooldown.
-CREATE OR REPLACE PROCEDURE save_payout_destination(
-  p_user_id        VARCHAR(36),
-  p_ciphertext     TEXT,
-  p_iv             TEXT,
-  p_auth_tag       TEXT,
-  p_key_version    INT,
-  p_channel        VARCHAR(50),
-  p_bank_name      VARCHAR(100),
-  p_masked_display VARCHAR(50)
-) AS $$
-DECLARE
-  v_now      BIGINT;
-  v_existing RECORD;
-BEGIN
-  IF p_ciphertext IS NULL OR TRIM(p_ciphertext) = ''
-     OR p_iv IS NULL OR TRIM(p_iv) = ''
-     OR p_auth_tag IS NULL OR TRIM(p_auth_tag) = '' THEN
-    RAISE EXCEPTION 'Encrypted payout data is required.';
-  END IF;
-
-  IF p_channel IS NULL OR TRIM(p_channel) = '' THEN
-    RAISE EXCEPTION 'Payout channel is required.';
-  END IF;
-
-  IF p_masked_display IS NULL OR TRIM(p_masked_display) = '' THEN
-    RAISE EXCEPTION 'Masked display is required.';
-  END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM users WHERE id = p_user_id) THEN
-    RAISE EXCEPTION 'User not found.';
-  END IF;
-
-  v_now := extract(epoch from now()) * 1000;
-
-  SELECT verified_at, relinked_at INTO v_existing
-  FROM payout_vault WHERE user_id = p_user_id FOR UPDATE;
-
-  IF FOUND AND holder_has_active_order(p_user_id) THEN
-    RAISE EXCEPTION 'You cannot change your payout account while you have an active order.';
-  END IF;
-
-  INSERT INTO payout_vault (
-    user_id, ciphertext, iv, auth_tag, key_version,
-    channel, bank_name, masked_display,
-    verified_at, relinked_at, created_at, updated_at
-  ) VALUES (
-    p_user_id, p_ciphertext, p_iv, p_auth_tag, COALESCE(p_key_version, 1),
-    TRIM(p_channel), NULLIF(TRIM(COALESCE(p_bank_name, '')), ''), TRIM(p_masked_display),
-    NULL, NULL, v_now, v_now
-  )
-  ON CONFLICT (user_id) DO UPDATE
-  SET ciphertext     = EXCLUDED.ciphertext,
-      iv             = EXCLUDED.iv,
-      auth_tag       = EXCLUDED.auth_tag,
-      key_version    = EXCLUDED.key_version,
-      channel        = EXCLUDED.channel,
-      bank_name      = EXCLUDED.bank_name,
-      masked_display = EXCLUDED.masked_display,
-      verified_at    = NULL,
-      relinked_at    = CASE
-                         WHEN v_existing.verified_at IS NOT NULL THEN v_now
-                         ELSE payout_vault.relinked_at
-                       END,
-      updated_at     = v_now;
-END;
-$$ LANGUAGE plpgsql;
-
-
--- Called after the verify step (title fetch) succeeds
-CREATE OR REPLACE PROCEDURE mark_payout_verified(
-  p_user_id VARCHAR(36)
-) AS $$
-BEGIN
-  UPDATE payout_vault
-  SET verified_at = extract(epoch from now()) * 1000,
-      updated_at  = extract(epoch from now()) * 1000
-  WHERE user_id = p_user_id;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'No payout account to verify. Link a payout account first.';
-  END IF;
-END;
-$$ LANGUAGE plpgsql;
-
-
--- Holder removes their payout destination (blocked while an order depends on it)
-CREATE OR REPLACE PROCEDURE remove_payout(
-  p_user_id VARCHAR(36)
-) AS $$
-BEGIN
-  IF holder_has_active_order(p_user_id) THEN
-    RAISE EXCEPTION 'You cannot remove your payout account while you have an active order.';
-  END IF;
-
-  DELETE FROM payout_vault WHERE user_id = p_user_id;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'No payout account linked.';
-  END IF;
-END;
-$$ LANGUAGE plpgsql;
-
-
--- Safe for API responses: never returns ciphertext, iv, or auth tag
-CREATE OR REPLACE FUNCTION get_payout_public(
-  p_user_id VARCHAR(36)
-) RETURNS JSON AS $$
-BEGIN
-  RETURN json_build_object(
-    'payout_status',  get_payout_state(p_user_id),
-    'channel',        (SELECT channel FROM payout_vault WHERE user_id = p_user_id),
-    'bank_name',      (SELECT bank_name FROM payout_vault WHERE user_id = p_user_id),
-    'masked_display', (SELECT masked_display FROM payout_vault WHERE user_id = p_user_id),
-    'verified_at',    (SELECT verified_at FROM payout_vault WHERE user_id = p_user_id),
-    'relinked_at',    (SELECT relinked_at FROM payout_vault WHERE user_id = p_user_id)
-  );
-END;
-$$ LANGUAGE plpgsql STABLE;
-
-
--- Backend-only: encrypted row for payout decryption. Never expose through an API route.
-CREATE OR REPLACE FUNCTION get_payout_ciphertext(
-  p_user_id VARCHAR(36)
-) RETURNS JSON AS $$
-BEGIN
-  RETURN (
-    SELECT row_to_json(v)
-    FROM (
-      SELECT ciphertext, iv, auth_tag, key_version, channel, bank_name
-      FROM payout_vault
-      WHERE user_id = p_user_id
-      AND verified_at IS NOT NULL
-    ) v
-  );
-END;
-$$ LANGUAGE plpgsql STABLE;
-
-
--- Lock sensitive vault functions to the DB owner role (backend). No PostgREST/anon access.
-DO $$
-DECLARE
-  r   RECORD;
-  rol TEXT;
-BEGIN
-  FOR r IN
-    SELECT p.oid::regprocedure AS sig,
-           CASE WHEN p.prokind = 'p' THEN 'PROCEDURE' ELSE 'FUNCTION' END AS kind
-    FROM pg_proc p
-    JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname = 'public'
-    AND p.proname IN (
-      'save_payout_destination', 'mark_payout_verified', 'remove_payout',
-      'get_payout_public', 'get_payout_ciphertext'
-    )
-  LOOP
-    EXECUTE format('REVOKE ALL ON %s %s FROM PUBLIC', r.kind, r.sig);
-    FOREACH rol IN ARRAY ARRAY['anon', 'authenticated'] LOOP
-      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = rol) THEN
-        EXECUTE format('REVOKE ALL ON %s %s FROM %I', r.kind, r.sig, rol);
-      END IF;
-    END LOOP;
-  END LOOP;
-
-  FOREACH rol IN ARRAY ARRAY['anon', 'authenticated'] LOOP
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = rol) THEN
-      EXECUTE format('REVOKE ALL ON TABLE payout_vault FROM %I', rol);
-    END IF;
-  END LOOP;
-END;
-$$;
-
-
-
-/* ─────────────────────────────────────────────────────────────
    CARDS
    User adds cards, toggles sharing, then circle members can see them
    ───────────────────────────────────────────────────────────── */
@@ -761,8 +538,7 @@ BEGIN
         cards.card_type,
         cards.card_tier,
         cards.allow_sharing,
-        cards.created_at,
-        get_payout_state(cards.user_id) AS payout_status
+        cards.created_at
       FROM cards
       WHERE cards.user_id = p_user_id
     ) c
@@ -797,7 +573,7 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM requests
     WHERE card_id = p_card_id
-    AND rq_status IN ('pending', 'payment_pending', 'escrow_locked', 'tracking_submitted')
+    AND rq_status IN ('pending', 'accepted', 'shopping', 'proof_submitted')
   ) THEN
     RAISE EXCEPTION 'Cannot delete card. There is an active request using this card.';
   END IF;
@@ -870,7 +646,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Blocked if there is any active or disputed request between the two users
+-- Blocked while a live request exists between the two users
 CREATE OR REPLACE PROCEDURE remove_from_circle(
   p_user_id   VARCHAR(36),
   p_friend_id VARCHAR(36)
@@ -878,7 +654,7 @@ CREATE OR REPLACE PROCEDURE remove_from_circle(
 BEGIN
   IF EXISTS (
     SELECT 1 FROM requests
-    WHERE rq_status IN ('pending', 'payment_pending', 'escrow_locked', 'tracking_submitted')
+    WHERE rq_status IN ('pending', 'accepted', 'shopping', 'proof_submitted')
     AND (
       (requester_id = p_user_id AND card_holder_id = p_friend_id)
       OR (requester_id = p_friend_id AND card_holder_id = p_user_id)
@@ -918,8 +694,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Returns only cards with allow_sharing = 1 AND holder payout verified
--- Called by Sara when selecting which card to use for a request
+-- Returns cards the friend is sharing. Caller must already be in an accepted circle.
+-- Called by Sara when selecting which card to use for a request.
 CREATE OR REPLACE FUNCTION get_circle_cards(
   p_user_id   VARCHAR(36),
   p_friend_id VARCHAR(36)
@@ -941,7 +717,6 @@ BEGIN
       FROM cards
       WHERE cards.user_id = p_friend_id
       AND cards.allow_sharing = 1
-      AND get_payout_state(cards.user_id) = 'verified'
     ) c
   );
 END;
@@ -950,7 +725,7 @@ $$ LANGUAGE plpgsql;
 
 /* ─────────────────────────────────────────────────────────────
    CHAT
-   Available on any request that is not expired, declined, or cancelled
+   Available on a live request: pending, accepted, shopping, proof_submitted
    ───────────────────────────────────────────────────────────── */
 
 CREATE OR REPLACE PROCEDURE send_message(
@@ -967,7 +742,7 @@ BEGIN
     SELECT 1 FROM requests
     WHERE id = p_request_id
     AND (requester_id = p_sender_id OR card_holder_id = p_sender_id)
-    AND rq_status IN ('pending', 'payment_pending', 'escrow_locked', 'tracking_submitted')
+    AND rq_status IN ('pending', 'accepted', 'shopping', 'proof_submitted')
   ) THEN
     RAISE EXCEPTION 'Request not found or chat not available.';
   END IF;
@@ -1022,19 +797,4 @@ BEGIN
   );
 END;
 $$ LANGUAGE plpgsql;
-
-
-/* ─────────────────────────────────────────────────────────────
-   SCHEDULED JOBS (auth housekeeping only — no order timers)
-   purge_expired_refresh_tokens optional; not wired in backend yet
-   ───────────────────────────────────────────────────────────── */
-
--- Housekeeping — expired refresh token rows (optional; not wired in backend yet)
-CREATE OR REPLACE PROCEDURE purge_expired_refresh_tokens() AS $$
-BEGIN
-  DELETE FROM refresh_tokens
-  WHERE expires_at < (extract(epoch from now()) * 1000);
-END;
-$$ LANGUAGE plpgsql;
-
 
