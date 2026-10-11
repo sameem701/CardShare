@@ -2,7 +2,7 @@
 --
 -- MVP: no in-app payments. Amounts are whole PKR.
 -- Sara pays Ahmed outside the app after she accepts his proof.
--- Ahmed sets transactions.paid when that money has reached him.
+-- Ahmed sets the transaction status to paid when that money has reached him.
 
 /* ── EXTENSIONS ────────────────────────────────────────────── */
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -43,8 +43,9 @@ CREATE TABLE IF NOT EXISTS otp_phone_lockout (
 -- One active login per user. The app sends this id on each request.
 -- Logout deletes the row. No JWT and no refresh token.
 CREATE TABLE IF NOT EXISTS sessions (
-  id      VARCHAR(36) PRIMARY KEY,
-  user_id VARCHAR(36) NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE
+  id         VARCHAR(36) PRIMARY KEY,
+  user_id    VARCHAR(36) NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  created_at BIGINT NOT NULL
 );
 
 /* ── CARDS ──────────────────────────────────────────────────── */
@@ -52,7 +53,6 @@ CREATE TABLE IF NOT EXISTS cards (
   id            VARCHAR(36) PRIMARY KEY,
   user_id       VARCHAR(36) NOT NULL REFERENCES users(id),
   bank_name     VARCHAR(100) NOT NULL CHECK (bank_name IN ('HBL', 'MCB', 'UBL', 'Meezan', 'Bank Alfalah', 'Faysal Bank', 'Standard Chartered', 'Askari', 'Silk Bank', 'Allied Bank', 'Habib Metro', 'JS Bank', 'Soneri Bank', 'Bank Al Habib')),
-  card_type     VARCHAR(50) NOT NULL CHECK (card_type IN ('Visa', 'Mastercard', 'UnionPay', 'PayPak', 'Amex')),
   card_tier     VARCHAR(50) NOT NULL CHECK (card_tier IN ('Classic', 'Gold', 'Platinum', 'Titanium', 'Signature', 'World')),
   allow_sharing INT NOT NULL DEFAULT 0,
   created_at    BIGINT NOT NULL
@@ -64,15 +64,17 @@ CREATE TABLE IF NOT EXISTS circle (
   friend_id  VARCHAR(36) NOT NULL REFERENCES users(id),
   c_status   VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (c_status IN ('pending', 'accepted', 'declined')),
   created_at BIGINT NOT NULL,
-  PRIMARY KEY (user_id, friend_id)
+  PRIMARY KEY (user_id, friend_id),
+  CHECK (user_id <> friend_id)
 );
 
 /* ── REQUESTS ───────────────────────────────────────────────── */
--- Live order. Deleted when Sara accepts Ahmed's proof; a transactions row replaces it.
+-- Live order. Deleted when it becomes a transaction.
+-- A pending cancel or a decline deletes the row. An accepted cancel, or Sara
+-- accepting the proof, writes a transaction and moves the chat onto it first.
 -- rq_status:
---   pending          — Sara created the request
---   accepted         — Ahmed accepted; they chat before he can shop
---   shopping         — both have chatted; Ahmed can see the address and shop
+--   pending          — Sara created the request. No chat. Address hidden from Ahmed.
+--   accepted         — Ahmed accepted. Address is visible, chat is open, he can shop.
 --   proof_submitted  — Ahmed sent the receipt and actual_amount_paid; waiting on Sara
 -- Saving is order_amount - actual_amount_paid. No stored discount or fee.
 CREATE TABLE IF NOT EXISTS requests (
@@ -84,42 +86,52 @@ CREATE TABLE IF NOT EXISTS requests (
   product_url        TEXT,
   delivery_address   TEXT NOT NULL,
   order_amount       INT NOT NULL CHECK (order_amount > 100),
+  actual_amount_paid INT,
   note               TEXT,
   screenshot_url     VARCHAR(200),
-  actual_amount_paid INT,
   rq_status          VARCHAR(20) NOT NULL DEFAULT 'pending'
-                       CHECK (rq_status IN ('pending', 'accepted', 'shopping', 'proof_submitted')),
+                       CHECK (rq_status IN ('pending', 'accepted', 'proof_submitted')),
   created_at         BIGINT NOT NULL,
   updated_at         BIGINT NOT NULL
 );
 
 /* ── TRANSACTIONS ───────────────────────────────────────────── */
--- Created when Sara accepts the proof. The request row is deleted.
--- paid is false until Ahmed confirms he received the money outside the app.
+-- Written when Sara accepts proof, or when either person cancels an accepted request.
+-- txn_status: unpaid, paid, cancelled_by_requester, cancelled_by_holder.
+-- cancel_reason is required for the two cancelled statuses.
 -- Card fields are copied so history survives if the card is later changed or deleted.
 CREATE TABLE IF NOT EXISTS transactions (
   id                 VARCHAR(36) PRIMARY KEY,
   requester_id       VARCHAR(36) NOT NULL REFERENCES users(id),
   card_holder_id     VARCHAR(36) NOT NULL REFERENCES users(id),
   merchant           VARCHAR(100) NOT NULL,
-  product_url        TEXT,
   delivery_address   TEXT NOT NULL,
   order_amount       INT NOT NULL,
-  note               TEXT,
   bank_name          VARCHAR(100) NOT NULL,
-  card_type          VARCHAR(50) NOT NULL,
   card_tier          VARCHAR(50) NOT NULL,
   actual_amount_paid INT,
   screenshot_url     VARCHAR(200),
-  paid               BOOLEAN NOT NULL DEFAULT false,
+  txn_status         VARCHAR(30) NOT NULL
+                       CHECK (txn_status IN (
+                         'unpaid', 'paid',
+                         'cancelled_by_requester', 'cancelled_by_holder'
+                       )),
+  cancel_reason      TEXT,
   created_at         BIGINT NOT NULL,
-  updated_at         BIGINT NOT NULL
+  updated_at         BIGINT NOT NULL,
+  CHECK (
+    (txn_status IN ('cancelled_by_requester', 'cancelled_by_holder')
+      AND cancel_reason IS NOT NULL AND TRIM(cancel_reason) <> '')
+    OR txn_status IN ('unpaid', 'paid')
+  )
 );
 
 /* ── CHAT ───────────────────────────────────────────────────── */
+-- thread_id is the request id while the order is live.
+-- When the request becomes a transaction, messages are updated to that transaction id.
 CREATE TABLE IF NOT EXISTS chat_messages (
   id              VARCHAR(36) PRIMARY KEY,
-  request_id      VARCHAR(36) NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+  thread_id       VARCHAR(36) NOT NULL,
   sender_id       VARCHAR(36) NOT NULL REFERENCES users(id),
   chat_message    TEXT,
   attachment_path VARCHAR(200),
@@ -131,7 +143,6 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 
 
 /* ── INDEXES for performance ────────────────────────────────── */
-CREATE INDEX IF NOT EXISTS idx_otps_phone          ON otps(phone);
 CREATE INDEX IF NOT EXISTS idx_cards_user          ON cards(user_id);
 CREATE INDEX IF NOT EXISTS idx_circle_user         ON circle(user_id);
 CREATE INDEX IF NOT EXISTS idx_circle_friend       ON circle(friend_id);
@@ -141,7 +152,7 @@ CREATE INDEX IF NOT EXISTS idx_requests_requester_holder ON requests(requester_i
 CREATE INDEX IF NOT EXISTS idx_requests_status     ON requests(rq_status);
 CREATE INDEX IF NOT EXISTS idx_txn_requester       ON transactions(requester_id);
 CREATE INDEX IF NOT EXISTS idx_txn_holder          ON transactions(card_holder_id);
-CREATE INDEX IF NOT EXISTS idx_chat_request        ON chat_messages(request_id);
+CREATE INDEX IF NOT EXISTS idx_chat_thread        ON chat_messages(thread_id);
 
 
 /* ─────────────────────────────────────────────────────────────
@@ -258,8 +269,8 @@ BEGIN
 
   v_session_id := uuid_generate_v4()::varchar;
 
-  INSERT INTO sessions (id, user_id)
-  VALUES (v_session_id, p_user_id);
+  INSERT INTO sessions (id, user_id, created_at)
+  VALUES (v_session_id, p_user_id, extract(epoch from now()) * 1000);
 
   RETURN json_build_object('session_id', v_session_id);
 END;
@@ -267,7 +278,7 @@ $$ LANGUAGE plpgsql;
 
 
 -- Session row must match this session id and user id.
--- Drops the old 3-arg form so a re-run does not leave two copies.
+-- Sent on every request so as to validate the user session
 DROP FUNCTION IF EXISTS validate_session(VARCHAR, VARCHAR, VARCHAR);
 
 CREATE OR REPLACE FUNCTION validate_session(
@@ -288,15 +299,6 @@ BEGIN
     'session_id', v_session.id,
     'user_id',    v_session.user_id
   );
-END;
-$$ LANGUAGE plpgsql;
-
-
-CREATE OR REPLACE PROCEDURE revoke_session(
-  p_session_id VARCHAR(36)
-) AS $$
-BEGIN
-  DELETE FROM sessions WHERE id = p_session_id;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -512,15 +514,17 @@ $$ LANGUAGE plpgsql;
    User adds cards, toggles sharing, then circle members can see them
    ───────────────────────────────────────────────────────────── */
 
+-- Drops the old form that also took card_type.
+DROP PROCEDURE IF EXISTS add_card(VARCHAR, VARCHAR, VARCHAR, VARCHAR);
+
 CREATE OR REPLACE PROCEDURE add_card(
   p_user_id   VARCHAR(36),
   p_bank_name VARCHAR(100),
-  p_card_type VARCHAR(50),
   p_card_tier VARCHAR(50)
 ) AS $$
 BEGIN
-  INSERT INTO cards (id, user_id, bank_name, card_type, card_tier, created_at)
-  VALUES (uuid_generate_v4()::varchar, p_user_id, p_bank_name, p_card_type, p_card_tier, extract(epoch from now()) * 1000);
+  INSERT INTO cards (id, user_id, bank_name, card_tier, created_at)
+  VALUES (uuid_generate_v4()::varchar, p_user_id, p_bank_name, p_card_tier, extract(epoch from now()) * 1000);
 END;
 $$ LANGUAGE plpgsql;
 
@@ -535,7 +539,6 @@ BEGIN
       SELECT
         cards.id,
         cards.bank_name,
-        cards.card_type,
         cards.card_tier,
         cards.allow_sharing,
         cards.created_at
@@ -573,7 +576,7 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM requests
     WHERE card_id = p_card_id
-    AND rq_status IN ('pending', 'accepted', 'shopping', 'proof_submitted')
+    AND rq_status IN ('pending', 'accepted', 'proof_submitted')
   ) THEN
     RAISE EXCEPTION 'Cannot delete card. There is an active request using this card.';
   END IF;
@@ -602,6 +605,10 @@ CREATE OR REPLACE PROCEDURE add_to_circle(
   p_friend_id VARCHAR(36)
 ) AS $$
 BEGIN
+  IF p_user_id = p_friend_id THEN
+    RAISE EXCEPTION 'You cannot add yourself to your circle.';
+  END IF;
+
   IF EXISTS (
     SELECT 1 FROM circle
     WHERE (
@@ -654,7 +661,7 @@ CREATE OR REPLACE PROCEDURE remove_from_circle(
 BEGIN
   IF EXISTS (
     SELECT 1 FROM requests
-    WHERE rq_status IN ('pending', 'accepted', 'shopping', 'proof_submitted')
+    WHERE rq_status IN ('pending', 'accepted', 'proof_submitted')
     AND (
       (requester_id = p_user_id AND card_holder_id = p_friend_id)
       OR (requester_id = p_friend_id AND card_holder_id = p_user_id)
@@ -713,7 +720,7 @@ BEGIN
   RETURN (
     SELECT COALESCE(json_agg(c), '[]'::json)
     FROM (
-      SELECT cards.id, cards.bank_name, cards.card_type, cards.card_tier
+      SELECT cards.id, cards.bank_name, cards.card_tier
       FROM cards
       WHERE cards.user_id = p_friend_id
       AND cards.allow_sharing = 1
@@ -725,7 +732,7 @@ $$ LANGUAGE plpgsql;
 
 /* ─────────────────────────────────────────────────────────────
    CHAT
-   Available on a live request: pending, accepted, shopping, proof_submitted
+   Available once Ahmed has accepted: accepted, proof_submitted
    ───────────────────────────────────────────────────────────── */
 
 CREATE OR REPLACE PROCEDURE send_message(
@@ -742,7 +749,7 @@ BEGIN
     SELECT 1 FROM requests
     WHERE id = p_request_id
     AND (requester_id = p_sender_id OR card_holder_id = p_sender_id)
-    AND rq_status IN ('pending', 'accepted', 'shopping', 'proof_submitted')
+    AND rq_status IN ('accepted', 'proof_submitted')
   ) THEN
     RAISE EXCEPTION 'Request not found or chat not available.';
   END IF;
@@ -755,7 +762,7 @@ BEGIN
   END IF;
 
   INSERT INTO chat_messages (
-    id, request_id, sender_id, chat_message, attachment_path, created_at
+    id, thread_id, sender_id, chat_message, attachment_path, created_at
   )
   VALUES (
     uuid_generate_v4()::varchar,
@@ -769,16 +776,19 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Returns messages in chronological order
--- Verifies user is a party to the request before returning anything
+-- Returns messages for a live request or for the transaction that replaced it.
 CREATE OR REPLACE FUNCTION get_messages(
-  p_request_id VARCHAR(36),
-  p_user_id    VARCHAR(36)
+  p_thread_id VARCHAR(36),
+  p_user_id   VARCHAR(36)
 ) RETURNS JSON AS $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM requests
-    WHERE id = p_request_id
+    WHERE id = p_thread_id
+    AND (requester_id = p_user_id OR card_holder_id = p_user_id)
+  ) AND NOT EXISTS (
+    SELECT 1 FROM transactions
+    WHERE id = p_thread_id
     AND (requester_id = p_user_id OR card_holder_id = p_user_id)
   ) THEN
     RAISE EXCEPTION 'Request not found or access denied.';
@@ -791,7 +801,7 @@ BEGIN
              cm.chat_message, cm.attachment_path, cm.created_at
       FROM chat_messages cm
       JOIN users u ON u.id = cm.sender_id
-      WHERE cm.request_id = p_request_id
+      WHERE cm.thread_id = p_thread_id
       ORDER BY cm.created_at ASC
     ) m
   );
