@@ -1,61 +1,22 @@
 -- database/schema.sql
 --
--- Money convention: all amounts are whole PKR (Pakistani Rupees), stored as INT.
--- User counters total_saved / total_earned are lifetime display stats only.
--- Real money moves via PSP — not stored as wallet_balance.
+-- MVP: no in-app payments. Amounts are whole PKR.
+-- Sara pays Ahmed outside the app after she accepts his proof.
+-- Ahmed sets transactions.paid when that money has reached him.
 
 /* ── EXTENSIONS ────────────────────────────────────────────── */
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 
 /* ── USERS ──────────────────────────────────────────────────── */
+-- Login is phone + OTP. Display name is the only profile field.
+-- Onboarding is done when display_name is set. No PIN, device binding, or payout data.
 CREATE TABLE IF NOT EXISTS users (
-  id                   VARCHAR(36) PRIMARY KEY,
-  phone                VARCHAR(20) UNIQUE NOT NULL,
-  display_name         VARCHAR(100),
-  pin_hash             TEXT,
-  total_saved          INT NOT NULL DEFAULT 0,
-  total_earned         INT NOT NULL DEFAULT 0,
-  security_question    TEXT,
-  security_answer_hash TEXT,
-  device_id            VARCHAR(200),
-  is_onboarded         INT NOT NULL DEFAULT 0,
-  created_at           BIGINT NOT NULL
+  id             VARCHAR(36) PRIMARY KEY,
+  phone          VARCHAR(20) UNIQUE NOT NULL,
+  display_name   VARCHAR(100),
+  created_at     BIGINT NOT NULL
 );
-
--- Payout state now lives only in payout_vault (see below). Remove legacy columns on existing DBs.
-ALTER TABLE users DROP COLUMN IF EXISTS psp_payee_id;
-ALTER TABLE users DROP COLUMN IF EXISTS payout_status;
-ALTER TABLE users DROP COLUMN IF EXISTS payout_linked_at;
-ALTER TABLE users DROP COLUMN IF EXISTS payout_relinked_at;
-
-/* ── PAYOUT VAULT ───────────────────────────────────────────── */
--- One encrypted payout destination per user (holder receives money here).
--- ciphertext = AES-256-GCM(account number/IBAN + account title), encrypted in Node.
--- Database never sees plaintext account details; the key lives only in backend env.
--- Payout state is derived from this row:
---   no row                → none
---   row, verified_at NULL → pending
---   row, verified_at set  → verified
--- relinked_at is set only when an already-verified destination is replaced
--- (24h accept cooldown from that moment).
-CREATE TABLE IF NOT EXISTS payout_vault (
-  user_id         VARCHAR(36) PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  ciphertext      TEXT NOT NULL,
-  iv              TEXT NOT NULL,
-  auth_tag        TEXT NOT NULL,
-  key_version     INT NOT NULL DEFAULT 1,
-  channel         VARCHAR(50) NOT NULL,     -- provider code, free text (no fixed list)
-  bank_name       VARCHAR(100),
-  masked_display  VARCHAR(50) NOT NULL,     -- e.g. ****7890 (last 4 only)
-  verified_at     BIGINT,
-  relinked_at     BIGINT,
-  created_at      BIGINT NOT NULL,
-  updated_at      BIGINT NOT NULL
-);
-
--- No client (anon/authenticated) access: backend connects with the DB owner role only.
-ALTER TABLE payout_vault ENABLE ROW LEVEL SECURITY;
 
 /* ── OTPs ───────────────────────────────────────────────────── */
 CREATE TABLE IF NOT EXISTS otps (
@@ -78,53 +39,12 @@ CREATE TABLE IF NOT EXISTS otp_phone_lockout (
   permanently_blocked INT NOT NULL DEFAULT 0
 );
 
-/* ── PIN PHONE LOCKOUT ──────────────────────────────────────── */
--- Phone-wide PIN ban after 4 failed verifies in a round (separate from OTP lockout).
--- fail_round escalation: 1 day → 2 → 4 → 10 → permanently blocked (contact support).
-CREATE TABLE IF NOT EXISTS pin_phone_lockout (
-  phone               VARCHAR(20) PRIMARY KEY,
-  pin_fail_count      INT NOT NULL DEFAULT 0,
-  fail_round          INT NOT NULL DEFAULT 0,
-  blocked_until       BIGINT,
-  permanently_blocked INT NOT NULL DEFAULT 0
-);
-
-/* ── PIN RESET GRANTS ───────────────────────────────────────── */
--- After correct security answer: phone may reset PIN once before expires_at (15 min).
-CREATE TABLE IF NOT EXISTS pin_reset_grants (
-  phone      VARCHAR(20) PRIMARY KEY,
-  expires_at BIGINT NOT NULL,
-  created_at BIGINT NOT NULL
-);
-
-/* ── SECURITY ANSWER LOCKOUT ────────────────────────────────── */
--- 3 wrong security answers → permanently blocked (contact support). No ban ladder.
-CREATE TABLE IF NOT EXISTS security_answer_lockout (
-  phone               VARCHAR(20) PRIMARY KEY,
-  fail_count          INT NOT NULL DEFAULT 0,
-  permanently_blocked INT NOT NULL DEFAULT 0
-);
-
-
 /* ── SESSIONS ────────────────────────────────────────────────── */
--- One active login session per user; id goes in access JWT as session_id
--- Lifetime tied to refresh (revoked together) — no expires_at column
+-- One active login per user. The app sends this id on each request.
+-- Logout deletes the row. No JWT and no refresh token.
 CREATE TABLE IF NOT EXISTS sessions (
   id      VARCHAR(36) PRIMARY KEY,
   user_id VARCHAR(36) NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE
-);
-
-/* ── REFRESH TOKENS ─────────────────────────────────────────── */
--- Opaque refresh tokens (SHA-256 hash stored — plain token never persisted)
--- One active refresh per user (one-device policy); rotated on each /auth/refresh
--- Revoked via revoke_refresh_tokens on logout or bind_device (new phone OTP); sessions cleared too
-CREATE TABLE IF NOT EXISTS refresh_tokens (
-  id          VARCHAR(36) PRIMARY KEY,
-  user_id     VARCHAR(36) NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
-  device_id   VARCHAR(200) NOT NULL,
-  token_hash  TEXT NOT NULL UNIQUE,
-  expires_at  BIGINT NOT NULL,
-  created_at  BIGINT NOT NULL
 );
 
 /* ── CARDS ──────────────────────────────────────────────────── */
@@ -148,72 +68,52 @@ CREATE TABLE IF NOT EXISTS circle (
 );
 
 /* ── REQUESTS ───────────────────────────────────────────────── */
--- Live state of an order — row exists until a terminal transaction is created
--- Columns marked "set at accept_request" are NULL until Ahmed accepts
--- Financial columns on requests:
---   order amount         —  set at create_request
---   platform_fee       — set at submit_tracking (5% of actual_saving)
---   incentive_fee      — set at submit_tracking (15% of actual_saving)
---   actual_amount_paid — set at submit_tracking (Ahmed's checkout total)
---   psp_hold_id        — set at escrow_locked (PSP escrow reference)
--- 'completed' and 'disputed' are not in rq_status — those states immediately
--- create a transaction row and delete this request row
+-- Live order. Deleted when Sara accepts Ahmed's proof; a transactions row replaces it.
+-- rq_status:
+--   pending          — Sara created the request
+--   accepted         — Ahmed accepted; they chat before he can shop
+--   shopping         — both have chatted; Ahmed can see the address and shop
+--   proof_submitted  — Ahmed sent the receipt and actual_amount_paid; waiting on Sara
+-- Saving is order_amount - actual_amount_paid. No stored discount or fee.
 CREATE TABLE IF NOT EXISTS requests (
-  id                   VARCHAR(36) PRIMARY KEY,
-  requester_id         VARCHAR(36) NOT NULL REFERENCES users(id),
-  card_holder_id       VARCHAR(36) NOT NULL REFERENCES users(id),
-  card_id              VARCHAR(36) NOT NULL REFERENCES cards(id),
-  merchant             VARCHAR(100) NOT NULL,
-  product_url          TEXT,
-  delivery_address     TEXT NOT NULL,
-  order_amount         INT NOT NULL CHECK (order_amount > 100),
-  discount_percentage  INT NOT NULL DEFAULT 0,
-  note                 TEXT,
-
-  -- set at submit_tracking
-  platform_fee         INT,
-  incentive_fee        INT,
-  screenshot_url       VARCHAR(200),
-  actual_amount_paid   INT,
-  rq_status            VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (rq_status IN ('pending', 'payment_pending', 'escrow_locked', 'tracking_submitted')),
-  psp_hold_id          VARCHAR(200),
-  psp_paid_at          BIGINT,
-  created_at           BIGINT NOT NULL,
-  updated_at           BIGINT NOT NULL
+  id                 VARCHAR(36) PRIMARY KEY,
+  requester_id       VARCHAR(36) NOT NULL REFERENCES users(id),
+  card_holder_id     VARCHAR(36) NOT NULL REFERENCES users(id),
+  card_id            VARCHAR(36) NOT NULL REFERENCES cards(id),
+  merchant           VARCHAR(100) NOT NULL,
+  product_url        TEXT,
+  delivery_address   TEXT NOT NULL,
+  order_amount       INT NOT NULL CHECK (order_amount > 100),
+  note               TEXT,
+  screenshot_url     VARCHAR(200),
+  actual_amount_paid INT,
+  rq_status          VARCHAR(20) NOT NULL DEFAULT 'pending'
+                       CHECK (rq_status IN ('pending', 'accepted', 'shopping', 'proof_submitted')),
+  created_at         BIGINT NOT NULL,
+  updated_at         BIGINT NOT NULL
 );
 
 /* ── TRANSACTIONS ───────────────────────────────────────────── */
--- Sealed final record — created once, never updated
--- Self-contained snapshot — no FK back to requests (request row is deleted at this point)
--- txn_status values:
---   completed → order fulfilled, Ahmed paid, Sara refunded the difference
---   cancelled → Ahmed cancelled from escrow_locked, Sara refunded in full
---   disputed  → Sara rejected screenshot/amount, Sara refunded in full
---   refunded  → legacy rows only (old auto-refund cron); no longer written
+-- Created when Sara accepts the proof. The request row is deleted.
+-- paid is false until Ahmed confirms he received the money outside the app.
+-- Card fields are copied so history survives if the card is later changed or deleted.
 CREATE TABLE IF NOT EXISTS transactions (
-  id                   VARCHAR(36) PRIMARY KEY,
-  requester_id         VARCHAR(36) NOT NULL REFERENCES users(id),
-  card_holder_id       VARCHAR(36) NOT NULL REFERENCES users(id),
-  merchant             VARCHAR(100) NOT NULL,
-  product_url          TEXT,
-  delivery_address     TEXT NOT NULL,
-  order_amount         INT NOT NULL,
-  discount_percentage  INT NOT NULL DEFAULT 0,
-  note                 TEXT,
-  bank_name            VARCHAR(100) NOT NULL,
-  card_type            VARCHAR(50) NOT NULL,
-  card_tier            VARCHAR(50) NOT NULL,
-  platform_fee         INT NOT NULL DEFAULT 0,
-  incentive_fee        INT NOT NULL DEFAULT 0,
-  actual_amount_paid   INT,
-  txn_status           VARCHAR(20) NOT NULL CHECK (txn_status IN ('completed', 'cancelled', 'refunded', 'disputed')),
-  screenshot_url          VARCHAR(200),
-  dispute_reason       TEXT,
-  psp_hold_id          VARCHAR(200),
-  psp_paid_at          BIGINT,
-  psp_settled_at       BIGINT,
-  created_at           BIGINT NOT NULL,
-  updated_at           BIGINT NOT NULL
+  id                 VARCHAR(36) PRIMARY KEY,
+  requester_id       VARCHAR(36) NOT NULL REFERENCES users(id),
+  card_holder_id     VARCHAR(36) NOT NULL REFERENCES users(id),
+  merchant           VARCHAR(100) NOT NULL,
+  product_url        TEXT,
+  delivery_address   TEXT NOT NULL,
+  order_amount       INT NOT NULL,
+  note               TEXT,
+  bank_name          VARCHAR(100) NOT NULL,
+  card_type          VARCHAR(50) NOT NULL,
+  card_tier          VARCHAR(50) NOT NULL,
+  actual_amount_paid INT,
+  screenshot_url     VARCHAR(200),
+  paid               BOOLEAN NOT NULL DEFAULT false,
+  created_at         BIGINT NOT NULL,
+  updated_at         BIGINT NOT NULL
 );
 
 /* ── CHAT ───────────────────────────────────────────────────── */
@@ -232,8 +132,6 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 
 /* ── INDEXES for performance ────────────────────────────────── */
 CREATE INDEX IF NOT EXISTS idx_otps_phone          ON otps(phone);
-CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON refresh_tokens(token_hash);
-CREATE INDEX IF NOT EXISTS idx_refresh_tokens_exp  ON refresh_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_cards_user          ON cards(user_id);
 CREATE INDEX IF NOT EXISTS idx_circle_user         ON circle(user_id);
 CREATE INDEX IF NOT EXISTS idx_circle_friend       ON circle(friend_id);
