@@ -5,9 +5,6 @@ const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 
-// Fail fast if the payout vault encryption key is missing or malformed
-require('./utils/payoutVault').assertConfigured();
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -42,7 +39,7 @@ app.use(cors({
       callback(null, false);
     }
   },
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Id', 'X-Psp-Webhook-Secret'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Id'],
 }));
 app.use(express.json());
 
@@ -54,20 +51,17 @@ app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/onboarding', require('./routes/onboarding.routes'));
 app.use('/api/profile', require('./routes/profile.routes'));
 app.use('/api/cards', require('./routes/cards.routes'));
-app.use('/api/payout', require('./routes/payout.routes'));
 app.use('/api/circle', require('./routes/circle.routes'));
 app.use('/api/requester', require('./routes/requester.routes'));
 app.use('/api/holder', require('./routes/holder.routes'));
 app.use('/api/chat', require('./routes/chat.routes'));
-app.use('/api/psp/dev', require('./routes/psp.routes'));
-app.use('/payment', require('./routes/payment.routes'));
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found.' });
 });
 
 app.use((err, req, res, next) => {
-  // Body-parser errors can echo a snippet of the request body (e.g. payout details).
+  // Body-parser errors can echo a snippet of the request body.
   // Never log their message or stack.
   if (err.type === 'entity.parse.failed') {
     return res.status(400).json({ error: 'Invalid JSON body.' });

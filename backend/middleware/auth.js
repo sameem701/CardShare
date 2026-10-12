@@ -1,27 +1,20 @@
 const jwt = require('jsonwebtoken');
 const db = require('../config/db');
-const { getDeviceId } = require('../utils/requestDevice');
 
-const validateActiveSession = async (session_id, user_id, deviceId) => {
+const validateActiveSession = async (session_id, user_id) => {
   const { rows } = await db.query(
-    `SELECT 1 FROM sessions s
-     JOIN users u ON u.id = s.user_id
-     WHERE s.id = $1 AND s.user_id = $2 AND u.device_id = $3`,
-    [session_id, user_id, deviceId]
+    `SELECT 1 FROM sessions
+     WHERE id = $1 AND user_id = $2`,
+    [session_id, user_id]
   );
   return rows.length > 0;
 };
 
 const auth = async (req, res, next) => {
   const header = req.headers.authorization;
-  const deviceId = getDeviceId(req);
 
   if (!header || !header.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorised.' });
-  }
-
-  if (!deviceId) {
-    return res.status(401).json({ error: 'X-Device-Id header is required.' });
   }
 
   const token = header.split(' ')[1];
@@ -34,7 +27,7 @@ const auth = async (req, res, next) => {
       return res.status(401).json({ error: 'Session invalid. Please log in again.' });
     }
 
-    const valid = await validateActiveSession(session_id, user_id, deviceId);
+    const valid = await validateActiveSession(session_id, user_id);
     if (!valid) {
       return res.status(401).json({ error: 'Session revoked. Please log in again.' });
     }

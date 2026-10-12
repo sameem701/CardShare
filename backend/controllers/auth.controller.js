@@ -3,7 +3,6 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { sendWhatsApp } = require('../utils/sms');
-const { getDeviceId } = require('../utils/requestDevice');
 
 // Access JWT: { session_id, user_id } only — 5m TTL. No phone or device_id in payload.
 // Protected routes: Authorization Bearer + X-Device-Id header.
@@ -324,7 +323,7 @@ const resetForgotPin = async (req, res) => {
 // POST /api/auth/refresh
 const refreshToken = async (req, res) => {
   const { refresh_token } = req.body;
-  const device_id = getDeviceId(req, { allowBody: true });
+  const device_id = req.headers['x-device-id'] || req.body?.device_id;
 
   if (!refresh_token) {
     return res.status(400).json({ error: 'refresh_token is required.' });
