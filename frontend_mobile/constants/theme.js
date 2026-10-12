@@ -28,6 +28,7 @@ const theme = {
   fonts: {
     display: 'Syne',
     body: 'DM Sans',
+    bodyMedium: 'DM Sans Medium',
   },
   radius: {
     card: 16,
@@ -43,4 +44,4 @@ const theme = {
   },
 };
 
-module.exports = theme;
+export default theme;
