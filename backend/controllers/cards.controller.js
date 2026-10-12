@@ -17,8 +17,6 @@ const ALLOWED_BANKS = [
   'Bank Al Habib',
 ];
 
-const ALLOWED_CARD_TYPES = ['Visa', 'Mastercard', 'UnionPay', 'PayPak', 'Amex'];
-
 const ALLOWED_CARD_TIERS = [
   'Classic',
   'Gold',
@@ -28,26 +26,19 @@ const ALLOWED_CARD_TIERS = [
   'World',
 ];
 
-const validateCardFields = (bank_name, card_type, card_tier) => {
+const validateCardFields = (bank_name, card_tier) => {
   if (!bank_name || String(bank_name).trim() === '') {
     return 'bank_name is required.';
-  }
-  if (!card_type || String(card_type).trim() === '') {
-    return 'card_type is required.';
   }
   if (!card_tier || String(card_tier).trim() === '') {
     return 'card_tier is required.';
   }
 
   const bank = String(bank_name).trim();
-  const type = String(card_type).trim();
   const tier = String(card_tier).trim();
 
   if (!ALLOWED_BANKS.includes(bank)) {
     return `Invalid bank_name. Allowed: ${ALLOWED_BANKS.join(', ')}.`;
-  }
-  if (!ALLOWED_CARD_TYPES.includes(type)) {
-    return `Invalid card_type. Allowed: ${ALLOWED_CARD_TYPES.join(', ')}.`;
   }
   if (!ALLOWED_CARD_TIERS.includes(tier)) {
     return `Invalid card_tier. Allowed: ${ALLOWED_CARD_TIERS.join(', ')}.`;
@@ -57,21 +48,20 @@ const validateCardFields = (bank_name, card_type, card_tier) => {
 };
 
 // POST /api/cards
-// Add a card (bank + type + tier only — no card number stored)
+// Add a card (bank + tier only — no card number stored)
 const addCard = async (req, res) => {
   const user_id = req.user.id;
-  const { bank_name, card_type, card_tier } = req.body;
+  const { bank_name, card_tier } = req.body;
 
-  const validationError = validateCardFields(bank_name, card_type, card_tier);
+  const validationError = validateCardFields(bank_name, card_tier);
   if (validationError) {
     return res.status(400).json({ error: validationError });
   }
 
   try {
-    await db.query('CALL add_card($1, $2, $3, $4)', [
+    await db.query('CALL add_card($1, $2, $3)', [
       user_id,
       String(bank_name).trim(),
-      String(card_type).trim(),
       String(card_tier).trim(),
     ]);
     res.status(201).json({ message: 'Card added.' });
@@ -81,7 +71,7 @@ const addCard = async (req, res) => {
 };
 
 // GET /api/cards
-// List logged-in user's cards (includes allow_sharing + payout_status)
+// id, bank_name, card_tier, allow_sharing, created_at
 const getCards = async (req, res) => {
   const user_id = req.user.id;
 
@@ -138,6 +128,5 @@ module.exports = {
   toggleCardSharing,
   deleteCard,
   ALLOWED_BANKS,
-  ALLOWED_CARD_TYPES,
   ALLOWED_CARD_TIERS,
 };

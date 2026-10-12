@@ -7,16 +7,23 @@ const {
   verifyScreenshotFile,
 } = require('../utils/screenshotStorage');
 
-const requireOrderId = (req, res) => {
-  const order_id = req.params.id;
-  if (!order_id || String(order_id).trim() === '') {
-    res.status(400).json({ error: 'Order id is required.' });
+const requireId = (req, res, label) => {
+  const id = req.params.id;
+  if (!id || String(id).trim() === '') {
+    res.status(400).json({ error: `${label} is required.` });
     return null;
   }
-  return order_id;
+  return id;
 };
 
-const assertEscrowLockedOrder = async (order_id, holder_id) => {
+const withSignedScreenshots = async (records) => {
+  if (!Array.isArray(records)) {
+    return attachSignedScreenshotUrl(records);
+  }
+  return Promise.all(records.map((record) => attachSignedScreenshotUrl(record)));
+};
+
+const assertAcceptedOrder = async (order_id, holder_id) => {
   const { rows } = await db.query(
     `SELECT rq_status FROM requests
      WHERE id = $1 AND card_holder_id = $2`,
@@ -27,13 +34,13 @@ const assertEscrowLockedOrder = async (order_id, holder_id) => {
     throw new Error('Request not found or access denied.');
   }
 
-  if (rows[0].rq_status !== 'escrow_locked') {
-    throw new Error('Screenshot upload is only available when escrow is locked.');
+  if (rows[0].rq_status !== 'accepted') {
+    throw new Error('Screenshot upload is only available after the request is accepted.');
   }
 };
 
 // GET /api/holder/incoming
-// Pending requests waiting for Ahmed to accept or decline
+// Pending requests. The address is not included.
 const getIncomingRequests = async (req, res) => {
   const holder_id = req.user.id;
 
@@ -42,14 +49,14 @@ const getIncomingRequests = async (req, res) => {
       'SELECT get_incoming_requests($1) AS result',
       [holder_id]
     );
-    res.json(rows[0].result ?? []);   // if rows[0].result is undefined then return null
-  } catch (err) {                     // it is a nullish coalesce operator not a null (? : ) operator
+    res.json(rows[0].result ?? []);
+  } catch (err) {
     res.status(400).json({ error: err.message });
   }
 };
 
 // GET /api/holder/orders
-// Active orders after accept (payment_pending through tracking_submitted)
+// accepted and proof_submitted. The address is included.
 const getActiveOrders = async (req, res) => {
   const holder_id = req.user.id;
 
@@ -58,17 +65,17 @@ const getActiveOrders = async (req, res) => {
       'SELECT get_active_orders_holder($1) AS result',
       [holder_id]
     );
-    res.json(rows[0].result ?? []);
+    res.json(await withSignedScreenshots(rows[0].result ?? []));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 };
 
 // GET /api/holder/orders/:id
-// Single order detail (delivery address hidden until escrow_locked)
+// Address is present only when the status is accepted or proof_submitted.
 const getOrder = async (req, res) => {
   const holder_id = req.user.id;
-  const order_id = requireOrderId(req, res);
+  const order_id = requireId(req, res, 'Order id');
   if (!order_id) return;
 
   try {
@@ -83,10 +90,10 @@ const getOrder = async (req, res) => {
 };
 
 // POST /api/holder/orders/:id/accept
-// Accept pending request → payment_pending
+// pending becomes accepted.
 const acceptRequest = async (req, res) => {
   const holder_id = req.user.id;
-  const order_id = requireOrderId(req, res);
+  const order_id = requireId(req, res, 'Order id');
   if (!order_id) return;
 
   try {
@@ -101,10 +108,10 @@ const acceptRequest = async (req, res) => {
 };
 
 // POST /api/holder/orders/:id/decline
-// Decline pending request
+// Deletes a pending request.
 const declineRequest = async (req, res) => {
   const holder_id = req.user.id;
-  const order_id = requireOrderId(req, res);
+  const order_id = requireId(req, res, 'Order id');
   if (!order_id) return;
 
   try {
@@ -119,16 +126,21 @@ const declineRequest = async (req, res) => {
 };
 
 // DELETE /api/holder/orders/:id
-// Cancel from escrow_locked (after PSP refund webhook)
+// Accepted only. A reason is required. Writes cancelled_by_holder.
 const cancelOrder = async (req, res) => {
   const holder_id = req.user.id;
-  const order_id = requireOrderId(req, res);
+  const order_id = requireId(req, res, 'Order id');
   if (!order_id) return;
+
+  const reason = req.body?.reason;
+  if (!reason || String(reason).trim() === '') {
+    return res.status(400).json({ error: 'A reason is required to cancel.' });
+  }
 
   try {
     const { rows } = await db.query(
-      'SELECT cancel_request_holder($1, $2) AS result',
-      [order_id, holder_id]
+      'SELECT cancel_request_holder($1, $2, $3) AS result',
+      [order_id, holder_id, String(reason).trim()]
     );
     res.json(rows[0].result);
   } catch (err) {
@@ -137,10 +149,10 @@ const cancelOrder = async (req, res) => {
 };
 
 // POST /api/holder/orders/:id/screenshot/upload-url
-// Presigned upload slot for private Supabase bucket "screenshots"
+// Upload slot while the request is accepted.
 const getScreenshotUploadUrl = async (req, res) => {
   const holder_id = req.user.id;
-  const order_id = requireOrderId(req, res);
+  const order_id = requireId(req, res, 'Order id');
   if (!order_id) return;
 
   if (!isSupabaseConfigured()) {
@@ -148,7 +160,7 @@ const getScreenshotUploadUrl = async (req, res) => {
   }
 
   try {
-    await assertEscrowLockedOrder(order_id, holder_id);
+    await assertAcceptedOrder(order_id, holder_id);
     const upload = await createScreenshotUploadSlot(order_id, req.body?.extension);
     res.status(201).json(upload);
   } catch (err) {
@@ -156,11 +168,11 @@ const getScreenshotUploadUrl = async (req, res) => {
   }
 };
 
-// POST /api/holder/orders/:id/tracking
-// Submit checkout screenshot + actual amount paid
-const submitTracking = async (req, res) => {
+// POST /api/holder/orders/:id/proof
+// accepted becomes proof_submitted.
+const submitProof = async (req, res) => {
   const holder_id = req.user.id;
-  const order_id = requireOrderId(req, res);
+  const order_id = requireId(req, res, 'Order id');
   if (!order_id) return;
 
   const { screenshot_url, actual_amount_paid } = req.body;
@@ -188,7 +200,7 @@ const submitTracking = async (req, res) => {
     }
 
     const { rows } = await db.query(
-      'SELECT submit_tracking($1, $2, $3, $4) AS result',
+      'SELECT submit_proof($1, $2, $3, $4) AS result',
       [order_id, holder_id, pathCheck.path, amount]
     );
     res.json(rows[0].result);
@@ -198,7 +210,7 @@ const submitTracking = async (req, res) => {
 };
 
 // GET /api/holder/history
-// Past completed, disputed, and cancelled orders
+// unpaid, paid, cancelled_by_requester, cancelled_by_holder. No delivery address.
 const getTransactionHistory = async (req, res) => {
   const holder_id = req.user.id;
 
@@ -207,7 +219,25 @@ const getTransactionHistory = async (req, res) => {
       'SELECT get_transaction_history_holder($1) AS result',
       [holder_id]
     );
-    res.json(rows[0].result ?? []);
+    res.json(await withSignedScreenshots(rows[0].result ?? []));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
+// POST /api/holder/transactions/:id/confirm-paid
+// unpaid becomes paid.
+const confirmPaid = async (req, res) => {
+  const holder_id = req.user.id;
+  const txn_id = requireId(req, res, 'Transaction id');
+  if (!txn_id) return;
+
+  try {
+    const { rows } = await db.query(
+      'SELECT confirm_paid($1, $2) AS result',
+      [txn_id, holder_id]
+    );
+    res.json(rows[0].result);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -221,6 +251,7 @@ module.exports = {
   declineRequest,
   cancelOrder,
   getScreenshotUploadUrl,
-  submitTracking,
+  submitProof,
   getTransactionHistory,
+  confirmPaid,
 };

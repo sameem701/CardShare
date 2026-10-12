@@ -1,7 +1,8 @@
 const db = require('../config/db');
 
 // GET /api/profile
-// Logged-in user's profile (stats + payout status for home/settings)
+// Logged-in user: id, phone, display_name, created_at.
+// A null display_name means the name is not set.
 const getProfile = async (req, res) => {
   const user_id = req.user.id;
 

@@ -12,7 +12,8 @@ router.get('/orders/:id', controller.getOrder);
 router.post('/orders/:id/accept', controller.acceptRequest);
 router.post('/orders/:id/decline', controller.declineRequest);
 router.post('/orders/:id/screenshot/upload-url', controller.getScreenshotUploadUrl);
-router.post('/orders/:id/tracking', controller.submitTracking);
+router.post('/orders/:id/proof', controller.submitProof);
 router.delete('/orders/:id', controller.cancelOrder);
+router.post('/transactions/:id/confirm-paid', controller.confirmPaid);
 
 module.exports = router;

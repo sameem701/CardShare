@@ -39,7 +39,7 @@ app.use(cors({
       callback(null, false);
     }
   },
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Id'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-User-Id'],
 }));
 app.use(express.json());
 

@@ -21,7 +21,7 @@ const assertChatAvailable = async (request_id, user_id) => {
     `SELECT 1 FROM requests
      WHERE id = $1
      AND (requester_id = $2 OR card_holder_id = $2)
-     AND rq_status IN ('pending', 'payment_pending', 'escrow_locked', 'tracking_submitted')`,
+     AND rq_status IN ('accepted', 'proof_submitted')`,
     [request_id, user_id]
   );
 
@@ -31,7 +31,7 @@ const assertChatAvailable = async (request_id, user_id) => {
 };
 
 // GET /api/chat/:request_id
-// Chat history for an order (requester or holder only)
+// Messages for a live request, or for the transaction id that replaced it.
 const getMessages = async (req, res) => {
   const user_id = req.user.id;
   const request_id = requireRequestId(req, res);
@@ -49,7 +49,7 @@ const getMessages = async (req, res) => {
 };
 
 // POST /api/chat/:request_id/image/upload-url
-// Presigned upload for one optional image per message
+// Upload slot only while the request is accepted or proof_submitted.
 const getChatImageUploadUrl = async (req, res) => {
   const user_id = req.user.id;
   const request_id = requireRequestId(req, res);
@@ -69,7 +69,7 @@ const getChatImageUploadUrl = async (req, res) => {
 };
 
 // POST /api/chat/:request_id
-// Send text and/or one image on an active order
+// Send text and/or one image. Pending requests are rejected by send_message.
 const sendMessage = async (req, res) => {
   const user_id = req.user.id;
   const request_id = requireRequestId(req, res);

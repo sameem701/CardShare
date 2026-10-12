@@ -1,50 +1,36 @@
-const jwt = require('jsonwebtoken');
 const db = require('../config/db');
-
-const validateActiveSession = async (session_id, user_id) => {
-  const { rows } = await db.query(
-    `SELECT 1 FROM sessions
-     WHERE id = $1 AND user_id = $2`,
-    [session_id, user_id]
-  );
-  return rows.length > 0;
-};
 
 const auth = async (req, res, next) => {
   const header = req.headers.authorization;
+  const userIdHeader = req.headers['x-user-id'];
 
   if (!header || !header.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorised.' });
   }
 
-  const token = header.split(' ')[1];
+  const sessionId = header.slice('Bearer '.length).trim();
+  const userId = userIdHeader ? String(userIdHeader).trim() : '';
+
+  if (!sessionId || !userId) {
+    return res.status(401).json({ error: 'Unauthorised.' });
+  }
 
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    const { session_id, user_id } = payload;
+    const { rows } = await db.query(
+      'SELECT validate_session($1, $2) AS result',
+      [sessionId, userId]
+    );
+    const session = rows[0].result;
 
-    if (!session_id || !user_id) {
-      return res.status(401).json({ error: 'Session invalid. Please log in again.' });
-    }
-
-    const valid = await validateActiveSession(session_id, user_id);
-    if (!valid) {
+    req.user = { id: session.user_id, session_id: session.session_id };
+    next();
+  } catch (err) {
+    if (String(err.message || '').includes('Session revoked')) {
       return res.status(401).json({ error: 'Session revoked. Please log in again.' });
     }
 
-    req.user = { id: user_id, session_id };
-    next();
-  } catch (err) {
-    if (err.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        error: 'Access token expired.',
-        code: 'ACCESS_EXPIRED',
-      });
-    }
-
-    res.status(401).json({ error: 'Invalid or expired token.' });
+    return res.status(401).json({ error: 'Unauthorised.' });
   }
 };
 
 module.exports = auth;
-module.exports.validateActiveSession = validateActiveSession;
