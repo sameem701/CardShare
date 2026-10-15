@@ -13,3 +13,11 @@ export function verifyOtp(phone, otp) {
     body: { phone, otp },
   });
 }
+
+export function logout(sessionId, userId) {
+  return apiRequest('/api/auth/logout', {
+    method: 'POST',
+    sessionId,
+    userId,
+  });
+}

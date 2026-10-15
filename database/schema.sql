@@ -99,14 +99,20 @@ CREATE TABLE IF NOT EXISTS requests (
 -- Written when Sara accepts proof, or when either person cancels an accepted request.
 -- txn_status: unpaid, paid, cancelled_by_requester, cancelled_by_holder.
 -- cancel_reason is required for the two cancelled statuses.
--- Card fields are copied so history survives if the card is later changed or deleted.
+-- Closed orders are a snapshot. Nothing here points at cards or users, so
+-- deleting a card leaves the row, the amounts, and the copied names in place.
+-- Dashboard totals read these columns. card_id is the id the card had, kept
+-- so a card that still exists can show what it earned.
 CREATE TABLE IF NOT EXISTS transactions (
   id                 VARCHAR(36) PRIMARY KEY,
-  requester_id       VARCHAR(36) NOT NULL REFERENCES users(id),
-  card_holder_id     VARCHAR(36) NOT NULL REFERENCES users(id),
+  requester_id       VARCHAR(36) NOT NULL,
+  requester_name     VARCHAR(100) NOT NULL,
+  card_holder_id     VARCHAR(36) NOT NULL,
+  card_holder_name   VARCHAR(100) NOT NULL,
   merchant           VARCHAR(100) NOT NULL,
   delivery_address   TEXT NOT NULL,
   order_amount       INT NOT NULL,
+  card_id            VARCHAR(36),
   bank_name          VARCHAR(100) NOT NULL,
   card_tier          VARCHAR(50) NOT NULL,
   actual_amount_paid INT,
@@ -125,6 +131,29 @@ CREATE TABLE IF NOT EXISTS transactions (
     OR txn_status IN ('unpaid', 'paid')
   )
 );
+
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS card_id VARCHAR(36);
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS requester_name VARCHAR(100) NOT NULL DEFAULT '';
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS card_holder_name VARCHAR(100) NOT NULL DEFAULT '';
+
+UPDATE transactions AS txn
+SET requester_name = users.display_name
+FROM users
+WHERE users.id = txn.requester_id
+  AND txn.requester_name = '';
+
+UPDATE transactions AS txn
+SET card_holder_name = users.display_name
+FROM users
+WHERE users.id = txn.card_holder_id
+  AND txn.card_holder_name = '';
+
+ALTER TABLE transactions ALTER COLUMN requester_name DROP DEFAULT;
+ALTER TABLE transactions ALTER COLUMN card_holder_name DROP DEFAULT;
+
+ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_card_id_fkey;
+ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_requester_id_fkey;
+ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_card_holder_id_fkey;
 
 /* ── CHAT ───────────────────────────────────────────────────── */
 -- thread_id is the request id while the order is live.
@@ -152,6 +181,7 @@ CREATE INDEX IF NOT EXISTS idx_requests_requester_holder ON requests(requester_i
 CREATE INDEX IF NOT EXISTS idx_requests_status     ON requests(rq_status);
 CREATE INDEX IF NOT EXISTS idx_txn_requester       ON transactions(requester_id);
 CREATE INDEX IF NOT EXISTS idx_txn_holder          ON transactions(card_holder_id);
+CREATE INDEX IF NOT EXISTS idx_txn_card            ON transactions(card_id);
 CREATE INDEX IF NOT EXISTS idx_chat_thread        ON chat_messages(thread_id);
 
 
@@ -776,11 +806,19 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Returns messages for a live request or for the transaction that replaced it.
+-- Newest 30 messages, or the 30 older than the cursor. A call with only
+-- thread id and user id still works and returns the newest page.
+DROP FUNCTION IF EXISTS get_messages(VARCHAR, VARCHAR);
+
 CREATE OR REPLACE FUNCTION get_messages(
-  p_thread_id VARCHAR(36),
-  p_user_id   VARCHAR(36)
+  p_thread_id         VARCHAR(36),
+  p_user_id           VARCHAR(36),
+  p_before_created_at BIGINT DEFAULT NULL,
+  p_before_id         VARCHAR(36) DEFAULT NULL,
+  p_limit             INT DEFAULT 30
 ) RETURNS JSON AS $$
+DECLARE
+  v_limit INT;
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM requests
@@ -794,15 +832,30 @@ BEGIN
     RAISE EXCEPTION 'Request not found or access denied.';
   END IF;
 
+  v_limit := 30;
+  IF p_limit IS NOT NULL AND p_limit BETWEEN 1 AND 30 THEN
+    v_limit := p_limit;
+  END IF;
+
   RETURN (
-    SELECT COALESCE(json_agg(m), '[]'::json)
+    SELECT COALESCE(json_agg(m ORDER BY m.created_at ASC, m.id ASC), '[]'::json)
     FROM (
       SELECT cm.id, cm.sender_id, u.display_name AS sender_name,
              cm.chat_message, cm.attachment_path, cm.created_at
       FROM chat_messages cm
       JOIN users u ON u.id = cm.sender_id
       WHERE cm.thread_id = p_thread_id
-      ORDER BY cm.created_at ASC
+      AND (
+        p_before_created_at IS NULL
+        OR cm.created_at < p_before_created_at
+        OR (
+          cm.created_at = p_before_created_at
+          AND p_before_id IS NOT NULL
+          AND cm.id < p_before_id
+        )
+      )
+      ORDER BY cm.created_at DESC, cm.id DESC
+      LIMIT v_limit
     ) m
   );
 END;

@@ -1,5 +1,3 @@
-// Visual tokens from lendcard.html. Screens should use these values.
-
 const theme = {
   colors: {
     green: '#00C87A',
@@ -24,6 +22,15 @@ const theme = {
     purple: '#C47AFF',
     black: '#000000',
     white: '#FFFFFF',
+    overlay: 'rgba(0, 0, 0, 0.6)',
+    vcardFace: '#0D1F16',
+    vcardFaceEnd: '#0A1A12',
+    vcardBorder: 'rgba(0, 200, 122, 0.25)',
+    vcardGlow: 'rgba(0, 200, 122, 0.05)',
+    vcardChipBg: 'rgba(0, 200, 122, 0.2)',
+    vcardChipBorder: 'rgba(0, 200, 122, 0.3)',
+    vcardChipStroke: 'rgba(0, 200, 122, 0.5)',
+    vcardChipLine: 'rgba(0, 200, 122, 0.3)',
   },
   fonts: {
     display: 'Syne',
@@ -36,11 +43,59 @@ const theme = {
     xs: 7,
     pill: 20,
     sheet: 24,
+    vcard: 18,
+    mark: 20,
+    logo: 10,
+    avatar: 19,
+  },
+  spacing: {
+    xs: 4,
+    sm: 8,
+    md: 12,
+    lg: 16,
+    xl: 20,
+    xxl: 24,
+    section: 10,
+  },
+  fontSize: {
+    caption: 10,
+    small: 11,
+    body: 13,
+    input: 15,
+    title: 22,
+    hero: 26,
+    display: 34,
+    otp: 24,
+    carouselArrow: 28,
+  },
+  lineHeight: {
+    display: 38,
+    hero: 32,
+    body: 22,
   },
   layout: {
     phoneWidth: 390,
     screenPadding: 20,
     stackGap: 16,
+    navHeight: 74,
+    topInset: 52,
+    brandMark: 72,
+    copyMaxWidth: 300,
+    otpBoxWidth: 52,
+    otpBoxHeight: 60,
+    caretWidth: 2,
+    caretHeight: 22,
+    carouselArrow: 40,
+    carouselCounterMinWidth: 48,
+  },
+  shadows: {
+    card: {
+      shadowColor: '#000000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.15,
+      shadowRadius: 12,
+      elevation: 4,
+    },
   },
 };
 

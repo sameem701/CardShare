@@ -143,17 +143,21 @@ BEGIN
   v_txn_id := uuid_generate_v4()::varchar;
 
   INSERT INTO transactions (
-    id, requester_id, card_holder_id, merchant,
+    id, requester_id, requester_name, card_holder_id, card_holder_name, merchant,
     delivery_address, order_amount,
-    bank_name, card_tier,
+    card_id, bank_name, card_tier,
     actual_amount_paid, screenshot_url,
     txn_status, cancel_reason,
     created_at, updated_at
   ) VALUES (
-    v_txn_id, v_request.requester_id, v_request.card_holder_id,
+    v_txn_id,
+    v_request.requester_id,
+    (SELECT display_name FROM users WHERE id = v_request.requester_id),
+    v_request.card_holder_id,
+    (SELECT display_name FROM users WHERE id = v_request.card_holder_id),
     v_request.merchant, v_request.delivery_address,
     v_request.order_amount,
-    v_card.bank_name, v_card.card_tier,
+    v_request.card_id, v_card.bank_name, v_card.card_tier,
     NULL, NULL,
     'cancelled_by_holder', v_reason,
     v_now, v_now
@@ -320,6 +324,7 @@ BEGIN
         txn.requester_id,
         txn.merchant,
         txn.order_amount,
+        txn.card_id,
         txn.bank_name,
         txn.card_tier,
         txn.actual_amount_paid,
@@ -328,9 +333,8 @@ BEGIN
         txn.cancel_reason,
         txn.created_at,
         txn.updated_at,
-        u.display_name AS requester_name
+        txn.requester_name
       FROM transactions txn
-      JOIN users u ON u.id = txn.requester_id
       WHERE txn.card_holder_id = p_holder_id
       ORDER BY txn.created_at DESC
     ) t

@@ -30,17 +30,62 @@ const assertChatAvailable = async (request_id, user_id) => {
   }
 };
 
+const readMessagePage = (req, res) => {
+  const beforeRaw = req.query.before_created_at;
+  const beforeIdRaw = req.query.before_id;
+  const limitRaw = req.query.limit;
+  const hasBefore = beforeRaw !== undefined && String(beforeRaw).trim() !== '';
+  const hasBeforeId = beforeIdRaw !== undefined && String(beforeIdRaw).trim() !== '';
+
+  if (hasBefore !== hasBeforeId) {
+    res.status(400).json({
+      error: 'before_created_at and before_id are both required to load older messages.',
+    });
+    return null;
+  }
+
+  let beforeCreatedAt = null;
+  let beforeId = null;
+  if (hasBefore) {
+    if (!/^\d+$/.test(String(beforeRaw).trim())) {
+      res.status(400).json({ error: 'before_created_at must be a whole number.' });
+      return null;
+    }
+    beforeCreatedAt = String(beforeRaw).trim();
+    beforeId = String(beforeIdRaw).trim();
+  }
+
+  let limit = 30;
+  if (limitRaw !== undefined && String(limitRaw).trim() !== '') {
+    if (!/^\d+$/.test(String(limitRaw).trim())) {
+      res.status(400).json({ error: 'limit must be a whole number from 1 to 30.' });
+      return null;
+    }
+    limit = Number(String(limitRaw).trim());
+    if (limit < 1 || limit > 30) {
+      res.status(400).json({ error: 'limit must be a whole number from 1 to 30.' });
+      return null;
+    }
+  }
+
+  return { beforeCreatedAt, beforeId, limit };
+};
+
 // GET /api/chat/:request_id
-// Messages for a live request, or for the transaction id that replaced it.
+// Newest 30 messages for a live request, or for the transaction that replaced it.
+// before_created_at and before_id together load the 30 messages older than that one.
 const getMessages = async (req, res) => {
   const user_id = req.user.id;
   const request_id = requireRequestId(req, res);
   if (!request_id) return;
 
+  const page = readMessagePage(req, res);
+  if (!page) return;
+
   try {
     const { rows } = await db.query(
-      'SELECT get_messages($1, $2) AS result',
-      [request_id, user_id]
+      'SELECT get_messages($1, $2, $3, $4, $5) AS result',
+      [request_id, user_id, page.beforeCreatedAt, page.beforeId, page.limit]
     );
     res.json(await attachSignedChatImageUrls(rows[0].result ?? []));
   } catch (err) {

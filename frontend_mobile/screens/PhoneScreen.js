@@ -1,12 +1,17 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import PrimaryButton from '../components/PrimaryButton';
+import TextField from '../components/TextField';
 import { sendOtp } from '../api/auth';
+import { useTopInset } from '../hooks/useTopInset';
+import { normalizePhone } from '../utils/phone';
 import theme from '../constants/theme';
 
 export default function PhoneScreen({ onBack, onSent }) {
   const [phone, setPhone] = useState('');
   const [error, setError] = useState('');
   const [sending, setSending] = useState(false);
+  const topInset = useTopInset();
 
   const onChangePhone = (value) => {
     const hasInvalidCharacter = /[^0-9+\s]/.test(value);
@@ -26,7 +31,7 @@ export default function PhoneScreen({ onBack, onSent }) {
   };
 
   const submit = async () => {
-    const trimmed = phone.trim();
+    const trimmed = normalizePhone(phone);
     const digitCount = trimmed.replace(/\D/g, '').length;
     if (!trimmed) {
       setError('Phone number is required.');
@@ -44,38 +49,34 @@ export default function PhoneScreen({ onBack, onSent }) {
       onSent(trimmed);
     } catch (err) {
       setError(err.message);
+      if (err.status === 429 && err.payload?.code === 'OTP_COOLDOWN') {
+        setError('Please wait a moment before requesting another code.');
+      }
     } finally {
       setSending(false);
     }
   };
 
   return (
-    <View style={styles.screen}>
-      <Pressable onPress={onBack} style={styles.back}>
+    <View style={[styles.screen, { paddingTop: topInset }]}>
+      <Pressable onPress={onBack} style={styles.back} accessibilityRole="button" accessibilityLabel="Back">
         <Text style={styles.backText}>← Back</Text>
       </Pressable>
       <Text style={styles.title}>Enter your{'\n'}phone number</Text>
       <Text style={styles.subtitle}>
         We'll send a 6-digit code. A new number and an existing account use this same step.
       </Text>
-      <TextInput
+      <TextField
         value={phone}
         onChangeText={onChangePhone}
         placeholder="+92 3xx xxxxxxx"
-        placeholderTextColor={theme.colors.text3}
         keyboardType="phone-pad"
         autoComplete="tel"
         style={styles.input}
         maxLength={20}
       />
       {error ? <Text style={styles.error}>{error}</Text> : null}
-      <Pressable
-        style={({ pressed }) => [styles.button, pressed && styles.buttonPressed, sending && styles.disabled]}
-        onPress={submit}
-        disabled={sending}
-      >
-        <Text style={styles.buttonText}>{sending ? 'Sending…' : 'Continue'}</Text>
-      </Pressable>
+      <PrimaryButton label="Continue" loading={sending} onPress={submit} />
     </View>
   );
 }
@@ -83,67 +84,40 @@ export default function PhoneScreen({ onBack, onSent }) {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    paddingTop: 60,
-    paddingHorizontal: 24,
-    paddingBottom: 40,
+    paddingHorizontal: theme.layout.screenPadding,
+    paddingBottom: theme.spacing.xxl,
   },
   back: {
     alignSelf: 'flex-start',
-    marginBottom: 24,
-    paddingVertical: 6,
+    marginBottom: theme.spacing.xxl,
+    paddingVertical: theme.spacing.xs,
   },
   backText: {
     fontFamily: theme.fonts.body,
-    fontSize: 14,
+    fontSize: theme.fontSize.body,
     color: theme.colors.text2,
   },
   title: {
     fontFamily: theme.fonts.display,
-    fontSize: 26,
-    lineHeight: 32,
+    fontSize: theme.fontSize.hero,
+    lineHeight: theme.lineHeight.hero,
     color: theme.colors.text,
-    marginBottom: 8,
+    marginBottom: theme.spacing.sm,
   },
   subtitle: {
     fontFamily: theme.fonts.body,
-    fontSize: 14,
-    lineHeight: 22,
+    fontSize: theme.fontSize.body,
+    lineHeight: theme.lineHeight.body,
     color: theme.colors.text2,
-    marginBottom: 28,
+    marginBottom: theme.spacing.xxl,
   },
   input: {
-    backgroundColor: theme.colors.bg3,
-    borderWidth: 0.5,
-    borderColor: theme.colors.border2,
-    borderRadius: theme.radius.control,
-    color: theme.colors.text,
-    fontFamily: theme.fonts.body,
-    fontSize: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    marginBottom: 16,
+    marginBottom: theme.spacing.lg,
   },
   error: {
     fontFamily: theme.fonts.body,
-    fontSize: 13,
+    fontSize: theme.fontSize.body,
     color: theme.colors.red,
-    marginBottom: 16,
-  },
-  button: {
-    backgroundColor: theme.colors.green,
-    borderRadius: theme.radius.control,
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  buttonPressed: {
-    backgroundColor: theme.colors.greenDark,
-  },
-  disabled: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    fontFamily: theme.fonts.bodyMedium,
-    fontSize: 15,
-    color: theme.colors.black,
+    marginBottom: theme.spacing.lg,
   },
 });

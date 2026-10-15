@@ -211,6 +211,7 @@ const submitProof = async (req, res) => {
 
 // GET /api/holder/history
 // unpaid, paid, cancelled_by_requester, cancelled_by_holder. No delivery address.
+// Includes card_id when the transaction was stored with one.
 const getTransactionHistory = async (req, res) => {
   const holder_id = req.user.id;
 

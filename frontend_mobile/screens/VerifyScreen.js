@@ -1,13 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import PrimaryButton from '../components/PrimaryButton';
 import { sendOtp, verifyOtp } from '../api/auth';
+import { useTopInset } from '../hooks/useTopInset';
 import theme from '../constants/theme';
+
+const RESEND_SECONDS = 60;
 
 export default function VerifyScreen({ phone, onBack, onVerified }) {
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [working, setWorking] = useState(false);
-  const [secondsLeft, setSecondsLeft] = useState(45);
+  const [secondsLeft, setSecondsLeft] = useState(RESEND_SECONDS);
+  const [resendsUsed, setResendsUsed] = useState(0);
+  const topInset = useTopInset();
   const [focused, setFocused] = useState(true);
   const inputRef = useRef(null);
 
@@ -43,6 +49,9 @@ export default function VerifyScreen({ phone, onBack, onVerified }) {
       const result = await verifyOtp(phone, code);
       onVerified(result);
     } catch (err) {
+      if (err.status === 429 && err.payload?.retry_after_ms) {
+        setSecondsLeft(Math.ceil(err.payload.retry_after_ms / 1000));
+      }
       setError(err.message);
     } finally {
       setWorking(false);
@@ -50,12 +59,17 @@ export default function VerifyScreen({ phone, onBack, onVerified }) {
   };
 
   const resend = async () => {
+    if (secondsLeft > 0 || resendsUsed >= 1) return;
     setWorking(true);
     setError('');
     try {
       await sendOtp(phone);
-      setSecondsLeft(45);
+      setResendsUsed(1);
+      setSecondsLeft(RESEND_SECONDS);
     } catch (err) {
+      if (err.status === 429 && err.payload?.retry_after_ms) {
+        setSecondsLeft(Math.ceil(err.payload.retry_after_ms / 1000));
+      }
       setError(err.message);
     } finally {
       setWorking(false);
@@ -67,8 +81,8 @@ export default function VerifyScreen({ phone, onBack, onVerified }) {
   const resendLabel = `Resend in 00:${String(secondsLeft).padStart(2, '0')}`;
 
   return (
-    <View style={styles.screen}>
-      <Pressable onPress={onBack} style={styles.back} disabled={working}>
+    <View style={[styles.screen, { paddingTop: topInset }]}>
+      <Pressable onPress={onBack} style={styles.back} disabled={working} accessibilityRole="button" accessibilityLabel="Back">
         <Text style={styles.backText}>← Back</Text>
       </Pressable>
       <Text style={styles.title}>Verify your{'\n'}phone number</Text>
@@ -99,21 +113,17 @@ export default function VerifyScreen({ phone, onBack, onVerified }) {
           style={styles.hiddenInput}
         />
       </Pressable>
-      {secondsLeft > 0 ? (
+      {resendsUsed >= 1 ? (
+        <Text style={styles.resendText}>A new code can be sent once.</Text>
+      ) : secondsLeft > 0 ? (
         <Text style={styles.resendText}>{resendLabel}</Text>
       ) : (
-        <Pressable onPress={resend} disabled={working}>
+        <Pressable onPress={resend} disabled={working} accessibilityRole="button" accessibilityLabel="Resend code">
           <Text style={styles.resendText}>Resend code</Text>
         </Pressable>
       )}
       {error ? <Text style={styles.error}>{error}</Text> : null}
-      <Pressable
-        style={({ pressed }) => [styles.button, pressed && styles.buttonPressed, working && styles.disabled]}
-        onPress={verify}
-        disabled={working}
-      >
-        <Text style={styles.buttonText}>{working ? 'Please wait…' : 'Verify & continue'}</Text>
-      </Pressable>
+      <PrimaryButton label="Verify & continue" loading={working} onPress={verify} />
     </View>
   );
 }
@@ -121,43 +131,42 @@ export default function VerifyScreen({ phone, onBack, onVerified }) {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    paddingTop: 60,
-    paddingHorizontal: 24,
-    paddingBottom: 40,
+    paddingHorizontal: theme.layout.screenPadding,
+    paddingBottom: theme.spacing.xxl,
   },
   back: {
     alignSelf: 'flex-start',
-    marginBottom: 24,
-    paddingVertical: 6,
+    marginBottom: theme.spacing.xxl,
+    paddingVertical: theme.spacing.xs,
   },
   backText: {
     fontFamily: theme.fonts.body,
-    fontSize: 14,
+    fontSize: theme.fontSize.body,
     color: theme.colors.text2,
   },
   title: {
     fontFamily: theme.fonts.display,
-    fontSize: 26,
-    lineHeight: 32,
+    fontSize: theme.fontSize.hero,
+    lineHeight: theme.lineHeight.hero,
     color: theme.colors.text,
-    marginBottom: 8,
+    marginBottom: theme.spacing.sm,
   },
   subtitle: {
     fontFamily: theme.fonts.body,
-    fontSize: 14,
-    lineHeight: 22,
+    fontSize: theme.fontSize.body,
+    lineHeight: theme.lineHeight.body,
     color: theme.colors.text2,
-    marginBottom: 28,
+    marginBottom: theme.spacing.xxl,
   },
   otpWrap: {
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: 10,
-    marginVertical: 20,
+    gap: theme.spacing.section,
+    marginVertical: theme.spacing.xl,
   },
   otpBox: {
-    width: 52,
-    height: 60,
+    width: theme.layout.otpBoxWidth,
+    height: theme.layout.otpBoxHeight,
     backgroundColor: theme.colors.bg3,
     borderWidth: 0.5,
     borderColor: theme.colors.border2,
@@ -173,51 +182,34 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
   },
   mark: {
-    width: 2,
-    height: 22,
+    width: theme.layout.caretWidth,
+    height: theme.layout.caretHeight,
     backgroundColor: theme.colors.text,
   },
   otpDigit: {
     fontFamily: theme.fonts.display,
-    fontSize: 24,
+    fontSize: theme.fontSize.otp,
     color: theme.colors.text,
   },
   hiddenInput: {
     position: 'absolute',
     opacity: 0,
     width: '100%',
-    height: 60,
+    height: theme.layout.otpBoxHeight,
   },
   resendText: {
     fontFamily: theme.fonts.body,
-    fontSize: 13,
+    fontSize: theme.fontSize.body,
     color: theme.colors.text3,
     textAlign: 'center',
-    marginBottom: 28,
+    marginBottom: theme.spacing.xxl,
   },
   error: {
     fontFamily: theme.fonts.body,
-    fontSize: 13,
+    fontSize: theme.fontSize.body,
     color: theme.colors.red,
     textAlign: 'center',
-    marginTop: -16,
-    marginBottom: 16,
-  },
-  button: {
-    backgroundColor: theme.colors.green,
-    borderRadius: theme.radius.control,
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  buttonPressed: {
-    backgroundColor: theme.colors.greenDark,
-  },
-  disabled: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    fontFamily: theme.fonts.bodyMedium,
-    fontSize: 15,
-    color: theme.colors.black,
+    marginTop: -theme.spacing.lg,
+    marginBottom: theme.spacing.lg,
   },
 });

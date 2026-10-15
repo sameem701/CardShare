@@ -2,6 +2,12 @@ import { API_BASE_URL } from '../constants/config';
 
 const REQUEST_TIMEOUT_MS = 15000;
 
+let onUnauthorized = null;
+
+export function setUnauthorizedHandler(handler) {
+  onUnauthorized = handler;
+}
+
 async function parseJsonResponse(response) {
   const text = await response.text();
   if (!text) {
@@ -10,36 +16,12 @@ async function parseJsonResponse(response) {
 
   try {
     return JSON.parse(text);
-  } catch (error) {
+  } catch {
     return { error: 'Invalid server response format.' };
   }
 }
 
 export async function apiRequest(path, { method = 'GET', body, sessionId, userId } = {}) {
-  // TEMPORARY: UI/UX only. Every request succeeds locally and never reaches the backend.
-  // Set SKIP_BACKEND to false to send real requests again.
-  const SKIP_BACKEND = true;
-
-  if (SKIP_BACKEND) {
-    if (path === '/api/auth/otp/verify') {
-      return {
-        session_id: 'local-session',
-        user: {
-          id: 'local-user',
-          phone: body?.phone ?? '',
-          display_name: null,
-          created_at: Date.now(),
-        },
-      };
-    }
-
-    if (path === '/api/auth/otp/send') {
-      return { message: 'OTP sent.' };
-    }
-
-    return { ok: true };
-  }
-
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -52,7 +34,7 @@ export async function apiRequest(path, { method = 'GET', body, sessionId, userId
         ...(sessionId ? { Authorization: `Bearer ${sessionId}` } : {}),
         ...(userId ? { 'X-User-Id': userId } : {}),
       },
-      body: body ? JSON.stringify(body) : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     });
   } catch (error) {
@@ -66,6 +48,10 @@ export async function apiRequest(path, { method = 'GET', body, sessionId, userId
   }
 
   const payload = await parseJsonResponse(response);
+
+  if (response.status === 401) {
+    onUnauthorized?.();
+  }
 
   if (!response.ok) {
     const message = payload?.error || 'Request failed.';

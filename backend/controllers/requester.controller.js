@@ -166,6 +166,7 @@ const rejectProof = async (req, res) => {
 
 // GET /api/requester/history
 // unpaid, paid, cancelled_by_requester, cancelled_by_holder. Includes delivery_address.
+// Includes card_id when the transaction was stored with one.
 const getTransactionHistory = async (req, res) => {
   const requester_id = req.user.id;
 
