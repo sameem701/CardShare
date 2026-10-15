@@ -140,7 +140,7 @@ export default function RequestDetailRequesterScreen({ requestId, onBack, onNavi
         <DetailRow label="Card holder" value={data.card_holder_name} />
         <DetailRow label="Card" value={`${data.bank_name} · ${data.card_tier}`} />
         <DetailRow label="Address" value={data.delivery_address} />
-        {data.product_url ? <DetailRow label="Product" value={data.product_url} /> : null}
+        {data.product_url ? <DetailRow label="Product" value={data.product_url} link /> : null}
         {data.note ? <DetailRow label="Note" value={data.note} /> : null}
       </DetailCard>
       <DetailCard>

@@ -1,5 +1,5 @@
 import { Children } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Linking, Platform, StyleSheet, Text, View } from 'react-native';
 import theme from '../constants/theme';
 
 export function DetailCard({ children }) {
@@ -15,11 +15,33 @@ export function DetailCard({ children }) {
   );
 }
 
-export function DetailRow({ label, value, highlight }) {
+export function DetailRow({ label, value, highlight, link }) {
+  const openLink = () => {
+    const raw = String(value || '').trim();
+    if (!raw) return;
+    const url = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    Linking.openURL(url).catch(() => {});
+  };
+  const valueStyle = [
+    styles.value,
+    highlight && styles.highlight,
+    link && styles.link,
+  ];
   return (
     <View style={styles.row}>
       <Text style={styles.label}>{label}</Text>
-      <Text style={[styles.value, highlight && styles.highlight]}>{value}</Text>
+      {link ? (
+        <Text
+          style={valueStyle}
+          onPress={openLink}
+          accessibilityRole="link"
+          accessibilityLabel={String(value)}
+        >
+          {String(value).replace(/(.{28})/g, '$1\u200b')}
+        </Text>
+      ) : (
+        <Text style={valueStyle}>{value}</Text>
+      )}
     </View>
   );
 }
@@ -51,6 +73,8 @@ const styles = StyleSheet.create({
   },
   value: {
     flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
     fontFamily: theme.fonts.bodyMedium,
     fontSize: theme.fontSize.body,
     color: theme.colors.text,
@@ -58,5 +82,10 @@ const styles = StyleSheet.create({
   },
   highlight: {
     color: theme.colors.green,
+  },
+  link: {
+    color: theme.colors.blue,
+    textDecorationLine: 'underline',
+    ...(Platform.OS === 'web' ? { wordBreak: 'break-all' } : {}),
   },
 });

@@ -202,7 +202,7 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
           label="Address"
           value={data.delivery_address || 'Shown after you accept'}
         />
-        {data.product_url ? <DetailRow label="Product" value={data.product_url} /> : null}
+        {data.product_url ? <DetailRow label="Product" value={data.product_url} link /> : null}
         {data.note ? <DetailRow label="Note" value={data.note} /> : null}
       </DetailCard>
       <DetailCard>

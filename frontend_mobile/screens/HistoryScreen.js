@@ -13,7 +13,7 @@ import { useSession } from '../context/SessionContext';
 import { asList, formatDate, formatPkr } from '../utils/format';
 import { txnStatusLabel, txnStatusVariant } from '../utils/orderRules';
 
-export default function HistoryScreen({ activeTab, onTabPress, onNavigate }) {
+export default function HistoryScreen({ onBack, onNavigate }) {
   const { sessionId, user } = useSession();
   const [asRequester, setAsRequester] = useState([]);
   const [asHolder, setAsHolder] = useState([]);
@@ -42,13 +42,10 @@ export default function HistoryScreen({ activeTab, onTabPress, onNavigate }) {
 
   return (
     <ScreenShell
-      withNav
-      activeTab={activeTab}
-      onTabPress={onTabPress}
       onRefresh={() => { setRefreshing(true); load(); }}
       refreshing={refreshing}
     >
-      <TopBar title="History" />
+      <TopBar title="History" onBack={onBack} />
       {loading ? (
         <LoadingState />
       ) : empty && !error ? (

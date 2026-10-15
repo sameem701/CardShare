@@ -7,7 +7,6 @@ const TABS = [
   ['home', 'Home'],
   ['circle', 'Circle'],
   ['request', 'Request'],
-  ['history', 'History'],
 ];
 
 export default function BottomNav({ activeTab, onTabPress }) {

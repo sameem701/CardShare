@@ -21,7 +21,7 @@ function circleBadge(member) {
   return { label: 'Pending', variant: 'amber' };
 }
 
-export default function CircleScreen({ activeTab, onTabPress, onNavigate }) {
+export default function CircleScreen({ activeTab, onTabPress, onNavigate, onMenu }) {
   const { sessionId, user } = useSession();
   const showToast = useToast();
   const [members, setMembers] = useState([]);
@@ -88,6 +88,8 @@ export default function CircleScreen({ activeTab, onTabPress, onNavigate }) {
     >
       <TopBar
         title="Trusted Circle"
+        displayName={user.display_name}
+        onAccount={onMenu}
         actionLabel="+ Add"
         onAction={() => onNavigate('add-circle')}
       />

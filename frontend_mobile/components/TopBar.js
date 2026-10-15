@@ -1,10 +1,9 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import theme from '../constants/theme';
 import { useTopInset } from '../hooks/useTopInset';
-import BrandMark from './BrandMark';
 import { initialsFor } from '../utils/initials';
 
-export default function TopBar({ title, onProfile, displayName, backLabel, onBack, actionLabel, onAction }) {
+export default function TopBar({ title, displayName, backLabel, onBack, onAccount, actionLabel, onAction }) {
   const topInset = useTopInset();
   return (
     <View style={[styles.bar, { paddingTop: topInset }]}>
@@ -12,25 +11,30 @@ export default function TopBar({ title, onProfile, displayName, backLabel, onBac
         <Pressable onPress={onBack} style={styles.backBtn} accessibilityRole="button" accessibilityLabel="Back">
           <Text style={styles.backText}>{backLabel || '← Back'}</Text>
         </Pressable>
-      ) : (
-        <View style={styles.logo}>
-          <BrandMark />
-        </View>
-      )}
+      ) : null}
       <Text style={styles.title} numberOfLines={1}>
         {title}
       </Text>
-      {onAction ? (
-        <Pressable onPress={onAction} style={styles.actionBtn} accessibilityRole="button" accessibilityLabel={actionLabel}>
-          <Text style={styles.actionText}>{actionLabel}</Text>
-        </Pressable>
-      ) : onProfile ? (
-        <Pressable onPress={onProfile} style={styles.avatar} accessibilityRole="button" accessibilityLabel="Profile">
-          <Text style={styles.avatarText}>{initialsFor(displayName)}</Text>
-        </Pressable>
-      ) : (
-        <View style={styles.spacer} />
-      )}
+      <View style={styles.right}>
+        {onAction ? (
+          <Pressable onPress={onAction} style={styles.actionBtn} accessibilityRole="button" accessibilityLabel={actionLabel}>
+            <Text style={styles.actionText}>{actionLabel}</Text>
+          </Pressable>
+        ) : null}
+        {displayName ? (
+          <Pressable
+            onPress={onAccount}
+            disabled={!onAccount}
+            style={styles.avatar}
+            accessibilityRole={onAccount ? 'button' : 'text'}
+            accessibilityLabel={onAccount ? 'Account' : initialsFor(displayName)}
+          >
+            <Text style={styles.avatarText}>{initialsFor(displayName)}</Text>
+          </Pressable>
+        ) : !onAction ? (
+          <View style={styles.spacer} />
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -45,20 +49,17 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.bg,
     zIndex: 2,
   },
-  logo: {
-    width: 36,
-    height: 36,
-    borderRadius: theme.radius.logo,
-    backgroundColor: theme.colors.green,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   title: {
     flex: 1,
     fontFamily: theme.fonts.display,
     fontSize: theme.fontSize.title,
     color: theme.colors.text,
     letterSpacing: -0.5,
+  },
+  right: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
   },
   avatar: {
     width: 38,

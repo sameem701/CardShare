@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { BackHandler, Platform } from 'react-native';
+import { BackHandler, Platform, View } from 'react-native';
+import SideMenu from '../components/SideMenu';
 import AddCardScreen from '../screens/AddCardScreen';
 import AddCircleScreen from '../screens/AddCircleScreen';
 import CardDetailScreen from '../screens/CardDetailScreen';
@@ -18,6 +19,7 @@ import TransactionDetailScreen from '../screens/TransactionDetailScreen';
 export default function MainApp({ onLoggedOut }) {
   const [tab, setTab] = useState('home');
   const [stack, setStack] = useState([]);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const navigate = (screen, params = {}, options = {}) => {
     setStack((current) => {
@@ -34,23 +36,38 @@ export default function MainApp({ onLoggedOut }) {
   useEffect(() => {
     if (Platform.OS !== 'android') return undefined;
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (menuOpen) {
+        setMenuOpen(false);
+        return true;
+      }
       if (stack.length === 0) return false;
       goBack();
       return true;
     });
     return () => subscription.remove();
-  }, [stack.length]);
+  }, [stack.length, menuOpen]);
 
+  const openHistory = () => {
+    setMenuOpen(false);
+    navigate('history');
+  };
+
+  const openMenu = () => setMenuOpen(true);
+
+  let screen = null;
   if (route) {
     switch (route.screen) {
       case 'add-card':
-        return <AddCardScreen onBack={goBack} onSaved={goBack} />;
+        screen = <AddCardScreen onBack={goBack} onSaved={goBack} />;
+        break;
       case 'card-detail':
-        return <CardDetailScreen cardId={route.params.cardId} onBack={goBack} />;
+        screen = <CardDetailScreen cardId={route.params.cardId} onBack={goBack} />;
+        break;
       case 'add-circle':
-        return <AddCircleScreen onBack={goBack} />;
+        screen = <AddCircleScreen onBack={goBack} />;
+        break;
       case 'create-request':
-        return (
+        screen = (
           <CreateRequestScreen
             onBack={goBack}
             onNavigate={navigate}
@@ -60,32 +77,39 @@ export default function MainApp({ onLoggedOut }) {
             }}
           />
         );
+        break;
+      case 'history':
+        screen = <HistoryScreen onBack={goBack} onNavigate={navigate} />;
+        break;
       case 'history-list':
-        return (
+        screen = (
           <HistoryListScreen
             role={route.params.role}
             onBack={goBack}
             onNavigate={navigate}
           />
         );
+        break;
       case 'order-detail':
-        return (
+        screen = (
           <OrderDetailHolderScreen
             orderId={route.params.orderId}
             onBack={goBack}
             onNavigate={navigate}
           />
         );
+        break;
       case 'request-detail':
-        return (
+        screen = (
           <RequestDetailRequesterScreen
             requestId={route.params.requestId}
             onBack={goBack}
             onNavigate={navigate}
           />
         );
+        break;
       case 'transaction-detail':
-        return (
+        screen = (
           <TransactionDetailScreen
             txnId={route.params.txnId}
             role={route.params.role}
@@ -94,29 +118,39 @@ export default function MainApp({ onLoggedOut }) {
             onNavigate={navigate}
           />
         );
+        break;
       case 'chat':
-        return (
+        screen = (
           <ChatScreen
             threadId={route.params.threadId}
             canSend={route.params.canSend}
             onBack={goBack}
           />
         );
+        break;
       case 'profile':
-        return <ProfileScreen onBack={goBack} onLoggedOut={onLoggedOut} />;
+        screen = <ProfileScreen onBack={goBack} onLoggedOut={onLoggedOut} />;
+        break;
       default:
-        return null;
+        screen = null;
     }
+  } else if (tab === 'circle') {
+    screen = <CircleScreen activeTab={tab} onTabPress={setTab} onNavigate={navigate} onMenu={openMenu} />;
+  } else if (tab === 'request') {
+    screen = <RequestsScreen activeTab={tab} onTabPress={setTab} onNavigate={navigate} onMenu={openMenu} />;
+  } else {
+    screen = <HomeScreen activeTab={tab} onTabPress={setTab} onNavigate={navigate} onMenu={openMenu} />;
   }
 
-  switch (tab) {
-    case 'circle':
-      return <CircleScreen activeTab={tab} onTabPress={setTab} onNavigate={navigate} />;
-    case 'request':
-      return <RequestsScreen activeTab={tab} onTabPress={setTab} onNavigate={navigate} />;
-    case 'history':
-      return <HistoryScreen activeTab={tab} onTabPress={setTab} onNavigate={navigate} />;
-    default:
-      return <HomeScreen activeTab={tab} onTabPress={setTab} onNavigate={navigate} />;
-  }
+  return (
+    <View style={{ flex: 1 }}>
+      {screen}
+      <SideMenu
+        visible={menuOpen && !route}
+        onClose={() => setMenuOpen(false)}
+        onHistory={openHistory}
+        onLoggedOut={onLoggedOut}
+      />
+    </View>
+  );
 }

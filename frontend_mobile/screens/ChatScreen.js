@@ -88,7 +88,7 @@ export default function ChatScreen({ threadId, canSend = false, onBack }) {
       style={styles.screen}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <TopBar title="Chat" onBack={onBack} actionLabel="Refresh" onAction={() => refreshNewest(threadId)} />
+      <TopBar title="Chat" onBack={onBack} />
       {loading && messages.length === 0 ? (
         <LoadingState />
       ) : (

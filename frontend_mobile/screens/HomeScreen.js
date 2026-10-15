@@ -23,7 +23,7 @@ function reasonMessage(result, fallback) {
   return result.reason?.message || fallback;
 }
 
-export default function HomeScreen({ activeTab, onTabPress, onNavigate }) {
+export default function HomeScreen({ activeTab, onTabPress, onNavigate, onMenu }) {
   const { sessionId, user } = useSession();
   const [cards, setCards] = useState([]);
   const [recent, setRecent] = useState([]);
@@ -173,7 +173,7 @@ export default function HomeScreen({ activeTab, onTabPress, onNavigate }) {
 
   return (
     <ScreenShell withNav activeTab={activeTab} onTabPress={onTabPress} onRefresh={onRefresh} refreshing={refreshing}>
-      <TopBar title="CardCircle" displayName={user.display_name} onProfile={() => onNavigate('profile')} />
+      <TopBar title="CardCircle" displayName={user.display_name} onAccount={onMenu} />
       <HomeStats stats={stats} />
       <View style={styles.pad}>
         <ErrorBanner message={statsError} onRetry={onRefresh} />

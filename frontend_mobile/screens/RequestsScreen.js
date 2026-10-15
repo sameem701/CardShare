@@ -19,7 +19,7 @@ const FILTERS = [
   ['holding', 'Card holder'],
 ];
 
-export default function RequestsScreen({ activeTab, onTabPress, onNavigate }) {
+export default function RequestsScreen({ activeTab, onTabPress, onNavigate, onMenu }) {
   const { sessionId, user } = useSession();
   const [items, setItems] = useState([]);
   const [filter, setFilter] = useState('all');
@@ -98,6 +98,8 @@ export default function RequestsScreen({ activeTab, onTabPress, onNavigate }) {
     >
       <TopBar
         title="Requests"
+        displayName={user.display_name}
+        onAccount={onMenu}
         actionLabel="New"
         onAction={() => onNavigate('create-request')}
       />

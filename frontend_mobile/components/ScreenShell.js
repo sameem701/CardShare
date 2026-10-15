@@ -1,5 +1,5 @@
 import { Children } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import theme from '../constants/theme';
 import { hiddenScrollProps } from '../utils/webChrome';
 import BottomNav from './BottomNav';
@@ -44,11 +44,6 @@ export default function ScreenShell({
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       {header}
-      {onRefresh && Platform.OS === 'web' ? (
-        <Pressable onPress={onRefresh} style={styles.refresh} accessibilityRole="button" accessibilityLabel="Refresh">
-          <Text style={styles.refreshText}>{refreshing ? 'Refreshing…' : 'Refresh'}</Text>
-        </Pressable>
-      ) : null}
       {body}
       {withNav ? <BottomNav activeTab={activeTab} onTabPress={onTabPress} /> : null}
     </KeyboardAvoidingView>
@@ -68,15 +63,5 @@ const styles = StyleSheet.create({
   },
   body: {
     flex: 1,
-  },
-  refresh: {
-    alignSelf: 'flex-end',
-    paddingHorizontal: theme.layout.screenPadding,
-    paddingBottom: theme.spacing.sm,
-  },
-  refreshText: {
-    fontFamily: theme.fonts.bodyMedium,
-    fontSize: theme.fontSize.body,
-    color: theme.colors.green,
   },
 });
