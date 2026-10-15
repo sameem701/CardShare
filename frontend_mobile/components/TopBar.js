@@ -1,15 +1,24 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
 import theme from '../constants/theme';
 import { useTopInset } from '../hooks/useTopInset';
 import { initialsFor } from '../utils/initials';
 
-export default function TopBar({ title, displayName, backLabel, onBack, onAccount, actionLabel, onAction }) {
+export function BackIcon() {
+  return (
+    <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
+      <Path d="M15 6L8 12l7 6" stroke={theme.colors.text} strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+export default function TopBar({ title, displayName, onBack, onAccount, actionLabel, onAction }) {
   const topInset = useTopInset();
   return (
     <View style={[styles.bar, { paddingTop: topInset }]}>
       {onBack ? (
         <Pressable onPress={onBack} style={styles.backBtn} accessibilityRole="button" accessibilityLabel="Back">
-          <Text style={styles.backText}>{backLabel || '← Back'}</Text>
+          <BackIcon />
         </Pressable>
       ) : null}
       <Text style={styles.title} numberOfLines={1}>
@@ -76,11 +85,6 @@ const styles = StyleSheet.create({
   },
   backBtn: {
     paddingVertical: theme.spacing.xs,
-  },
-  backText: {
-    fontFamily: theme.fonts.body,
-    fontSize: theme.fontSize.body,
-    color: theme.colors.text2,
   },
   actionBtn: {
     backgroundColor: theme.colors.green,

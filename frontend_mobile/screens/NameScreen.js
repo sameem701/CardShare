@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { BackIcon } from '../components/TopBar';
 import TextField from '../components/TextField';
 import { updateProfile } from '../api/onboarding';
 import { useTopInset } from '../hooks/useTopInset';
@@ -65,7 +66,7 @@ export default function NameScreen({ onBack, onSaved }) {
   return (
     <View style={[styles.screen, { paddingTop: topInset }]}>
       <Pressable onPress={onBack} style={styles.back} disabled={saving} accessibilityRole="button" accessibilityLabel="Back">
-        <Text style={styles.backText}>← Back</Text>
+        <BackIcon />
       </Pressable>
       <Text style={styles.title}>What should{'\n'}we call you?</Text>
       <Text style={styles.subtitle}>
@@ -111,11 +112,6 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     marginBottom: theme.spacing.xxl,
     paddingVertical: theme.spacing.xs,
-  },
-  backText: {
-    fontFamily: theme.fonts.body,
-    fontSize: theme.fontSize.body,
-    color: theme.colors.text2,
   },
   title: {
     fontFamily: theme.fonts.display,

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { BackIcon } from '../components/TopBar';
 import PrimaryButton from '../components/PrimaryButton';
 import TextField from '../components/TextField';
 import { sendOtp } from '../api/auth';
@@ -60,7 +61,7 @@ export default function PhoneScreen({ onBack, onSent }) {
   return (
     <View style={[styles.screen, { paddingTop: topInset }]}>
       <Pressable onPress={onBack} style={styles.back} accessibilityRole="button" accessibilityLabel="Back">
-        <Text style={styles.backText}>← Back</Text>
+        <BackIcon />
       </Pressable>
       <Text style={styles.title}>Enter your{'\n'}phone number</Text>
       <Text style={styles.subtitle}>
@@ -91,11 +92,6 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     marginBottom: theme.spacing.xxl,
     paddingVertical: theme.spacing.xs,
-  },
-  backText: {
-    fontFamily: theme.fonts.body,
-    fontSize: theme.fontSize.body,
-    color: theme.colors.text2,
   },
   title: {
     fontFamily: theme.fonts.display,

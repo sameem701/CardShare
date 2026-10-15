@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { BackIcon } from '../components/TopBar';
 import PrimaryButton from '../components/PrimaryButton';
 import { sendOtp, verifyOtp } from '../api/auth';
 import { useTopInset } from '../hooks/useTopInset';
@@ -83,7 +84,7 @@ export default function VerifyScreen({ phone, onBack, onVerified }) {
   return (
     <View style={[styles.screen, { paddingTop: topInset }]}>
       <Pressable onPress={onBack} style={styles.back} disabled={working} accessibilityRole="button" accessibilityLabel="Back">
-        <Text style={styles.backText}>← Back</Text>
+        <BackIcon />
       </Pressable>
       <Text style={styles.title}>Verify your{'\n'}phone number</Text>
       <Text style={styles.subtitle}>We sent a 6-digit code to {phone}</Text>
@@ -138,11 +139,6 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     marginBottom: theme.spacing.xxl,
     paddingVertical: theme.spacing.xs,
-  },
-  backText: {
-    fontFamily: theme.fonts.body,
-    fontSize: theme.fontSize.body,
-    color: theme.colors.text2,
   },
   title: {
     fontFamily: theme.fonts.display,
