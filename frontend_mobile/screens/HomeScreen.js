@@ -174,7 +174,7 @@ export default function HomeScreen({ activeTab, onTabPress, onNavigate, onMenu }
 
   return (
     <ScreenShell withNav activeTab={activeTab} onTabPress={onTabPress} onRefresh={onRefresh} refreshing={refreshing}>
-      <TopBar title="CardCircle" displayName={user.display_name} onAccount={onMenu} />
+      <TopBar title="Home" displayName={user.display_name} onAccount={onMenu} />
       <HomeStats stats={stats} />
       <View style={styles.pad}>
         <ErrorBanner message={statsError} onRetry={onRefresh} />

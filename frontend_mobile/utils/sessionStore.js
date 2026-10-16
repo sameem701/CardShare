@@ -6,14 +6,7 @@ const KEY = 'cardcircle_session';
 
 export async function readStoredSession() {
   if (Platform.OS === 'web') return AsyncStorage.getItem(KEY);
-  const secure = await SecureStore.getItemAsync(KEY);
-  if (secure) return secure;
-  const legacy = await AsyncStorage.getItem(KEY);
-  if (legacy) {
-    await SecureStore.setItemAsync(KEY, legacy);
-    await AsyncStorage.removeItem(KEY);
-  }
-  return legacy;
+  return SecureStore.getItemAsync(KEY);
 }
 
 export async function writeStoredSession(value) {
@@ -22,12 +15,12 @@ export async function writeStoredSession(value) {
     return;
   }
   await SecureStore.setItemAsync(KEY, value);
-  await AsyncStorage.removeItem(KEY);
 }
 
 export async function clearStoredSession() {
-  if (Platform.OS !== 'web') {
-    await SecureStore.deleteItemAsync(KEY);
+  if (Platform.OS === 'web') {
+    await AsyncStorage.removeItem(KEY);
+    return;
   }
-  await AsyncStorage.removeItem(KEY);
+  await SecureStore.deleteItemAsync(KEY);
 }
