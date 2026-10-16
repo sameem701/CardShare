@@ -1,6 +1,7 @@
 import { Children } from 'react';
 import { Linking, Platform, StyleSheet, Text, View } from 'react-native';
 import theme from '../constants/theme';
+import { isProductUrl } from '../utils/productUrl';
 
 export function DetailCard({ children }) {
   const items = Children.toArray(children).filter(Boolean);
@@ -16,21 +17,21 @@ export function DetailCard({ children }) {
 }
 
 export function DetailRow({ label, value, highlight, link }) {
+  const raw = String(value || '').trim();
+  const canOpen = Boolean(link) && isProductUrl(raw);
   const openLink = () => {
-    const raw = String(value || '').trim();
-    if (!raw) return;
-    const url = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-    Linking.openURL(url).catch(() => {});
+    if (!canOpen) return;
+    Linking.openURL(raw).catch(() => {});
   };
   const valueStyle = [
     styles.value,
     highlight && styles.highlight,
-    link && styles.link,
+    canOpen && styles.link,
   ];
   return (
     <View style={styles.row}>
       <Text style={styles.label}>{label}</Text>
-      {link ? (
+      {canOpen ? (
         <Text
           style={valueStyle}
           onPress={openLink}

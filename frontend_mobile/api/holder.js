@@ -46,10 +46,14 @@ export function getScreenshotUploadUrl(sessionId, userId, orderId, extension) {
   });
 }
 
-export function submitProof(sessionId, userId, orderId, screenshotUrl, actualAmountPaid) {
+export function submitProof(sessionId, userId, orderId, screenshotUrl, orderAmount, actualAmountPaid) {
   return apiRequest(`/api/holder/orders/${orderId}/proof`, {
     method: 'POST',
-    body: { screenshot_url: screenshotUrl, actual_amount_paid: actualAmountPaid },
+    body: {
+      screenshot_url: screenshotUrl,
+      order_amount: orderAmount,
+      actual_amount_paid: actualAmountPaid,
+    },
     sessionId,
     userId,
   });

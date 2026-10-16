@@ -34,6 +34,16 @@ BEGIN
     RAISE EXCEPTION 'Order amount must be greater than 100 PKR.';
   END IF;
 
+  -- Optional. When present: http(s), no spaces, site name ends in a letter TLD
+  -- such as .pk or .com. The path after the site does not need a file ending.
+  IF p_product_url IS NOT NULL AND btrim(p_product_url) <> '' THEN
+    IF p_product_url ~ '[[:space:]]'
+      OR p_product_url !~* '^https?://([a-z0-9-]+\.)+[a-z]{2,}([/?#][^[:space:]]*)?$'
+    THEN
+      RAISE EXCEPTION 'Product link must start with http:// or https://, contain no spaces, and use a site name that ends in letters such as .pk or .com.';
+    END IF;
+  END IF;
+
   IF NOT EXISTS (
     SELECT 1 FROM circle
     WHERE ((user_id = p_requester_id AND friend_id = p_card_holder_id)
@@ -284,6 +294,10 @@ BEGIN
     RAISE EXCEPTION 'Proof is missing the amount or the screenshot.';
   END IF;
 
+  IF v_request.actual_amount_paid > v_request.order_amount THEN
+    RAISE EXCEPTION 'Actual amount paid cannot exceed the order amount.';
+  END IF;
+
   SELECT * INTO v_card FROM cards WHERE id = v_request.card_id;
 
   IF NOT FOUND THEN
@@ -297,7 +311,7 @@ BEGIN
     id, requester_id, requester_name, card_holder_id, card_holder_name, merchant,
     delivery_address, order_amount,
     card_id, bank_name, card_tier,
-    actual_amount_paid, screenshot_url, txn_status,
+    actual_amount_paid, holder_share, screenshot_url, txn_status,
     created_at, updated_at
   ) VALUES (
     v_txn_id,
@@ -308,7 +322,9 @@ BEGIN
     v_request.merchant, v_request.delivery_address,
     v_request.order_amount,
     v_request.card_id, v_card.bank_name, v_card.card_tier,
-    v_request.actual_amount_paid, v_request.screenshot_url, 'unpaid',
+    v_request.actual_amount_paid,
+    ROUND((v_request.order_amount - v_request.actual_amount_paid) * 0.2)::INT,
+    v_request.screenshot_url, 'unpaid',
     v_now, v_now
   );
 
@@ -374,6 +390,7 @@ BEGIN
         txn.bank_name,
         txn.card_tier,
         txn.actual_amount_paid,
+        txn.holder_share,
         txn.screenshot_url,
         txn.txn_status,
         txn.cancel_reason,

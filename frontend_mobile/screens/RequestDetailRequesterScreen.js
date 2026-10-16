@@ -21,7 +21,8 @@ import theme from '../constants/theme';
 import { usePrefetchChat } from '../context/ChatCache';
 import { useSession } from '../context/SessionContext';
 import { useToast } from '../context/ToastContext';
-import { formatDate, formatPkr, savingAmount } from '../utils/format';
+import { formatDate, formatPkr } from '../utils/format';
+import { amountKept, amountOwed, recordedShare } from '../utils/settlement';
 import {
   REQUEST_STATUS_LABELS,
   requestStatusVariant,
@@ -125,7 +126,9 @@ export default function RequestDetailRequesterScreen({ requestId, onBack, onNavi
     );
   }
 
-  const saving = savingAmount(data.order_amount, data.actual_amount_paid);
+  const share = recordedShare(data);
+  const owed = amountOwed(data);
+  const kept = amountKept(data);
   const screenshot = data.screenshot_signed_url || data.screenshot_url;
 
   return (
@@ -144,11 +147,15 @@ export default function RequestDetailRequesterScreen({ requestId, onBack, onNavi
         {data.note ? <DetailRow label="Note" value={data.note} /> : null}
       </DetailCard>
       <DetailCard>
-        <DetailRow label="Order amount" value={formatPkr(data.order_amount)} />
+        <DetailRow label="Price without the card" value={formatPkr(data.order_amount)} />
         {data.actual_amount_paid != null ? (
-          <DetailRow label="They paid" value={formatPkr(data.actual_amount_paid)} />
+          <DetailRow label="Paid on card" value={formatPkr(data.actual_amount_paid)} />
         ) : null}
-        {saving != null ? <DetailRow label="You save" value={formatPkr(saving)} highlight /> : null}
+        {data.actual_amount_paid != null && share != null ? (
+          <DetailRow label="Their share" value={formatPkr(share)} />
+        ) : null}
+        {owed != null ? <DetailRow label="You pay" value={formatPkr(owed)} highlight /> : null}
+        {kept != null ? <DetailRow label="You keep" value={formatPkr(kept)} /> : null}
       </DetailCard>
       {screenshot ? (
         <View style={styles.proof}>

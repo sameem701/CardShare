@@ -26,6 +26,7 @@ import { usePrefetchChat } from '../context/ChatCache';
 import { useSession } from '../context/SessionContext';
 import { useToast } from '../context/ToastContext';
 import { formatDate, formatPkr } from '../utils/format';
+import { amountOwed, recordedShare } from '../utils/settlement';
 import {
   REQUEST_STATUS_LABELS,
   requestStatusVariant,
@@ -48,8 +49,10 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
   const [confirmDecline, setConfirmDecline] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelError, setCancelError] = useState('');
+  const [originalAmount, setOriginalAmount] = useState('');
   const [paidAmount, setPaidAmount] = useState('');
   const [pickedAsset, setPickedAsset] = useState(null);
+  const [originalReady, setOriginalReady] = useState(false);
   usePrefetchChat(orderId, Boolean(data) && canChatSendOnRequest(data?.rq_status));
 
   const load = useCallback(async () => {
@@ -68,6 +71,12 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!data || !holderCanSubmitProof(data.rq_status) || originalReady) return;
+    setOriginalAmount(data.order_amount == null ? '' : String(data.order_amount));
+    setOriginalReady(true);
+  }, [data, originalReady]);
 
   const accept = async () => {
     setWorking(true);
@@ -128,6 +137,13 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
     }
   };
 
+  const onChangeOriginal = (value) => {
+    const next = wholePkrFromInput(value);
+    setOriginalAmount(next.amount);
+    if (next.rejectedDecimal) setError('Enter a whole number of PKR, without paisa.');
+    else setError('');
+  };
+
   const onChangePaid = (value) => {
     const next = wholePkrFromInput(value);
     setPaidAmount(next.amount);
@@ -136,17 +152,22 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
   };
 
   const sendProof = async () => {
+    const original = parseWholePkr(originalAmount);
     const amount = parseWholePkr(paidAmount);
     if (!pickedAsset) {
       setError('Choose a screenshot of the receipt.');
       return;
     }
-    if (amount == null || amount <= 0) {
-      setError('Enter the actual amount paid (whole PKR).');
+    if (original == null || original <= 100) {
+      setError('Price without the card must be a whole number greater than 100 PKR.');
       return;
     }
-    if (data?.order_amount != null && amount > Number(data.order_amount)) {
-      setError('Amount paid cannot be more than the order amount.');
+    if (amount == null || amount <= 0) {
+      setError('Enter the amount paid on the card (whole PKR).');
+      return;
+    }
+    if (amount > original) {
+      setError('Amount paid cannot be more than the price without the card.');
       return;
     }
 
@@ -156,7 +177,7 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
       const prepared = await prepareImage(pickedAsset);
       const slot = await getScreenshotUploadUrl(sessionId, user.id, orderId, prepared.ext);
       await uploadBlobToSignedUrl(slot.signed_url, prepared.blob, prepared.mime);
-      await submitProof(sessionId, user.id, orderId, slot.path, amount);
+      await submitProof(sessionId, user.id, orderId, slot.path, original, amount);
       showToast('Proof sent');
       setPickedAsset(null);
       await load();
@@ -186,6 +207,15 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
   }
 
   const screenshot = data.screenshot_signed_url || data.screenshot_url;
+  const share = recordedShare(data);
+  const owed = amountOwed(data);
+  const typedOriginal = parseWholePkr(originalAmount);
+  const typedPaid = parseWholePkr(paidAmount);
+  const preview = typedOriginal != null && typedPaid != null && typedOriginal > 100 && typedPaid > 0 && typedPaid <= typedOriginal
+    ? { order_amount: typedOriginal, actual_amount_paid: typedPaid }
+    : null;
+  const previewShare = recordedShare(preview);
+  const previewOwed = amountOwed(preview);
 
   return (
     <ScreenShell onRefresh={() => { setRefreshing(true); load(); }} refreshing={refreshing}>
@@ -206,9 +236,15 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
         {data.note ? <DetailRow label="Note" value={data.note} /> : null}
       </DetailCard>
       <DetailCard>
-        <DetailRow label="Order amount" value={formatPkr(data.order_amount)} />
+        <DetailRow label="Price without the card" value={formatPkr(data.order_amount)} />
         {data.actual_amount_paid != null ? (
-          <DetailRow label="You paid" value={formatPkr(data.actual_amount_paid)} />
+          <DetailRow label="Paid on card" value={formatPkr(data.actual_amount_paid)} />
+        ) : null}
+        {data.actual_amount_paid != null && share != null ? (
+          <DetailRow label="Your share" value={formatPkr(share)} />
+        ) : null}
+        {owed != null ? (
+          <DetailRow label="They owe you" value={formatPkr(owed)} highlight />
         ) : null}
       </DetailCard>
       {screenshot ? (
@@ -233,13 +269,27 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
       {holderCanSubmitProof(data.rq_status) ? (
         <View style={styles.stack}>
           <Text style={styles.section}>Submit proof</Text>
-          <SecondaryButton label={pickedAsset ? 'Screenshot selected' : 'Choose screenshot'} onPress={pickImage} disabled={working} />
+          <Text style={styles.fieldLabel}>Price without the card</Text>
+          <TextField
+            value={originalAmount}
+            onChangeText={onChangeOriginal}
+            placeholder="Price without the card (PKR)"
+            keyboardType="number-pad"
+          />
+          <Text style={styles.fieldLabel}>Paid on card</Text>
           <TextField
             value={paidAmount}
             onChangeText={onChangePaid}
-            placeholder="Actual amount paid (PKR)"
+            placeholder="Amount the card was charged (PKR)"
             keyboardType="number-pad"
           />
+          <SecondaryButton label={pickedAsset ? 'Screenshot selected' : 'Choose screenshot'} onPress={pickImage} disabled={working} />
+          {previewOwed != null ? (
+            <DetailCard>
+              <DetailRow label="Your share" value={formatPkr(previewShare)} />
+              <DetailRow label="They owe you" value={formatPkr(previewOwed)} highlight />
+            </DetailCard>
+          ) : null}
           <PrimaryButton label="Submit proof" loading={working} onPress={sendProof} />
         </View>
       ) : null}
@@ -309,5 +359,10 @@ const styles = StyleSheet.create({
     color: theme.colors.text3,
     textTransform: 'uppercase',
     letterSpacing: 1,
+  },
+  fieldLabel: {
+    fontFamily: theme.fonts.bodyMedium,
+    fontSize: theme.fontSize.small,
+    color: theme.colors.text2,
   },
 });

@@ -15,7 +15,8 @@ import theme from '../constants/theme';
 import { usePrefetchChat } from '../context/ChatCache';
 import { useSession } from '../context/SessionContext';
 import { useToast } from '../context/ToastContext';
-import { formatDate, formatPkr, savingAmount } from '../utils/format';
+import { formatDate, formatPkr } from '../utils/format';
+import { amountKept, amountOwed, recordedShare } from '../utils/settlement';
 import { holderCanConfirmPaid, txnStatusLabel, txnStatusVariant } from '../utils/orderRules';
 
 export default function TransactionDetailScreen({ txnId, role, snapshot, onBack, onNavigate }) {
@@ -88,7 +89,9 @@ export default function TransactionDetailScreen({ txnId, role, snapshot, onBack,
     );
   }
 
-  const saving = savingAmount(data.order_amount, data.actual_amount_paid);
+  const share = recordedShare(data);
+  const owed = amountOwed(data);
+  const kept = amountKept(data);
   const screenshot = data.screenshot_signed_url || data.screenshot_url;
   const showAddress = role === 'requester' && data.delivery_address;
 
@@ -106,11 +109,19 @@ export default function TransactionDetailScreen({ txnId, role, snapshot, onBack,
         {data.cancel_reason ? <DetailRow label="Reason" value={data.cancel_reason} /> : null}
       </DetailCard>
       <DetailCard>
-        <DetailRow label="Order amount" value={formatPkr(data.order_amount)} />
+        <DetailRow label="Price without the card" value={formatPkr(data.order_amount)} />
         {data.actual_amount_paid != null ? (
           <DetailRow label="Paid on card" value={formatPkr(data.actual_amount_paid)} />
         ) : null}
-        {saving != null ? <DetailRow label="Saved" value={formatPkr(saving)} highlight /> : null}
+        {data.actual_amount_paid != null && share != null ? (
+          <DetailRow label={role === 'holder' ? 'Your share' : 'Their share'} value={formatPkr(share)} />
+        ) : null}
+        {owed != null ? (
+          <DetailRow label={role === 'holder' ? 'You receive' : 'You pay'} value={formatPkr(owed)} highlight />
+        ) : null}
+        {role === 'requester' && kept != null ? (
+          <DetailRow label="You keep" value={formatPkr(kept)} />
+        ) : null}
       </DetailCard>
       {screenshot ? (
         <View style={styles.proof}>
@@ -129,8 +140,8 @@ export default function TransactionDetailScreen({ txnId, role, snapshot, onBack,
         <PrimaryButton label="Money received" loading={working} onPress={() => setConfirmPaidOpen(true)} />
       ) : null}
 
-      {role === 'requester' && data.txn_status === 'unpaid' ? (
-        <Text style={styles.hint}>Pay them outside the app for the amount shown on the proof.</Text>
+      {role === 'requester' && data.txn_status === 'unpaid' && owed != null ? (
+        <Text style={styles.hint}>Pay them {formatPkr(owed)} outside the app.</Text>
       ) : null}
 
       <ErrorBanner message={error} onRetry={load} />

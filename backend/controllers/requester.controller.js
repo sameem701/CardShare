@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { normalizeProductUrl } = require('../utils/productUrl');
 const { attachSignedScreenshotUrl } = require('../utils/screenshotStorage');
 
 const MIN_ORDER_AMOUNT_PKR = 100;
@@ -53,6 +54,13 @@ const createRequest = async (req, res) => {
     });
   }
 
+  let productLink = null;
+  try {
+    productLink = normalizeProductUrl(product_url);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+
   try {
     const { rows } = await db.query(
       `SELECT create_request($1, $2, $3, $4, $5, $6, $7, $8) AS result`,
@@ -61,7 +69,7 @@ const createRequest = async (req, res) => {
         card_holder_id,
         card_id,
         String(merchant).trim(),
-        product_url ? String(product_url).trim() : null,
+        productLink,
         String(delivery_address).trim(),
         amount,
         note ? String(note).trim() : null,

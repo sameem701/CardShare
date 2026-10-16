@@ -1,11 +1,7 @@
 import { asList } from './format';
+import { amountKept, amountOwed } from './settlement';
 
 export const CHAT_PAGE_SIZE = 30;
-
-function money(value) {
-  const amount = Number(value);
-  return Number.isFinite(amount) ? amount : 0;
-}
 
 export function isThisMonth(ms) {
   if (ms == null || ms === '') return false;
@@ -27,16 +23,13 @@ export function dashboardStats({ holderHistory, requesterHistory, circle }) {
   const earnedByCard = {};
   paidHeld.forEach((txn) => {
     if (!txn.card_id) return;
-    earnedByCard[txn.card_id] = (earnedByCard[txn.card_id] || 0) + money(txn.actual_amount_paid);
+    earnedByCard[txn.card_id] = (earnedByCard[txn.card_id] || 0) + (amountOwed(txn) || 0);
   });
 
   return {
-    earnedAll: paidHeld.reduce((sum, txn) => sum + money(txn.actual_amount_paid), 0),
-    earnedMonth: paidHeldThisMonth.reduce((sum, txn) => sum + money(txn.actual_amount_paid), 0),
-    savedMonth: paidHeldThisMonth.reduce(
-      (sum, txn) => sum + (money(txn.order_amount) - money(txn.actual_amount_paid)),
-      0
-    ),
+    earnedAll: paidHeld.reduce((sum, txn) => sum + (amountOwed(txn) || 0), 0),
+    earnedMonth: paidHeldThisMonth.reduce((sum, txn) => sum + (amountOwed(txn) || 0), 0),
+    savedMonth: paidHeldThisMonth.reduce((sum, txn) => sum + (amountKept(txn) || 0), 0),
     paidCountMonth: paidHeldThisMonth.length + paidAskedThisMonth.length,
     circleCount: asList(circle).filter((member) => member.c_status === 'accepted').length,
     earnedByCard,

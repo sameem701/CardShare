@@ -17,6 +17,7 @@ import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
 import { dashboardStats } from '../utils/dashboard';
 import { asList, formatPkr, sharingOn } from '../utils/format';
+import { amountOwed } from '../utils/settlement';
 import { REQUEST_STATUS_LABELS, TXN_STATUS_LABELS, requestStatusVariant, txnStatusVariant } from '../utils/orderRules';
 
 function reasonMessage(result, fallback) {
@@ -107,7 +108,7 @@ export default function HomeScreen({ activeTab, onTabPress, onNavigate, onMenu }
               key: `unpaid-${item.id}`,
               updatedAt: item.updated_at || item.created_at,
               title: item.merchant,
-              subtitle: `${item.requester_name || 'Someone'} · ${formatPkr(item.actual_amount_paid)} still to receive`,
+              subtitle: `${item.requester_name || 'Someone'} · ${formatPkr(amountOwed(item))} still to receive`,
               badge: TXN_STATUS_LABELS.unpaid,
               badgeVariant: txnStatusVariant('unpaid'),
               nav: { screen: 'transaction-detail', params: { txnId: item.id, role: 'holder', snapshot: item } },

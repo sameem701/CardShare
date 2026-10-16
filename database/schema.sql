@@ -75,8 +75,10 @@ CREATE TABLE IF NOT EXISTS circle (
 -- rq_status:
 --   pending          — Sara created the request. No chat. Address hidden from Ahmed.
 --   accepted         — Ahmed accepted. Address is visible, chat is open, he can shop.
---   proof_submitted  — Ahmed sent the receipt and actual_amount_paid; waiting on Sara
--- Saving is order_amount - actual_amount_paid. No stored discount or fee.
+--   proof_submitted  — Ahmed sent the receipt, the final original price, and the card charge
+-- order_amount is the price of that checkout without this card. Ahmed can correct
+-- it when he submits proof. It is prefilled with the price Sara entered.
+-- The card charge is actual_amount_paid. His share is not stored on the request.
 CREATE TABLE IF NOT EXISTS requests (
   id                 VARCHAR(36) PRIMARY KEY,
   requester_id       VARCHAR(36) NOT NULL REFERENCES users(id),
@@ -103,6 +105,9 @@ CREATE TABLE IF NOT EXISTS requests (
 -- deleting a card leaves the row, the amounts, and the copied names in place.
 -- Dashboard totals read these columns. card_id is the id the card had, kept
 -- so a card that still exists can show what it earned.
+-- holder_share is 20% of order_amount minus actual_amount_paid, rounded to the
+-- nearest rupee, stored when Sara accepts proof. It stays empty when the order
+-- was cancelled before proof. She owes the card charge plus this share.
 CREATE TABLE IF NOT EXISTS transactions (
   id                 VARCHAR(36) PRIMARY KEY,
   requester_id       VARCHAR(36) NOT NULL,
@@ -116,6 +121,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   bank_name          VARCHAR(100) NOT NULL,
   card_tier          VARCHAR(50) NOT NULL,
   actual_amount_paid INT,
+  holder_share       INT,
   screenshot_url     VARCHAR(200),
   txn_status         VARCHAR(30) NOT NULL
                        CHECK (txn_status IN (
@@ -133,6 +139,17 @@ CREATE TABLE IF NOT EXISTS transactions (
 );
 
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS card_id VARCHAR(36);
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS holder_share INT;
+
+UPDATE transactions
+SET holder_share = ROUND((order_amount - actual_amount_paid) * 0.2)::INT
+WHERE actual_amount_paid IS NOT NULL
+  AND actual_amount_paid <= order_amount
+  AND holder_share IS NULL;
+
+ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_holder_share_nonnegative;
+ALTER TABLE transactions ADD CONSTRAINT transactions_holder_share_nonnegative
+  CHECK (holder_share IS NULL OR holder_share >= 0);
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS requester_name VARCHAR(100) NOT NULL DEFAULT '';
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS card_holder_name VARCHAR(100) NOT NULL DEFAULT '';
 

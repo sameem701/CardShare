@@ -11,6 +11,7 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.cardcircle.app",
       "adaptiveIcon": {
         "backgroundColor": "#0A0D0F",
         "foregroundImage": "./assets/android-icon-foreground.png",

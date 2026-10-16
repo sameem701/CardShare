@@ -7,6 +7,8 @@ const {
   verifyScreenshotFile,
 } = require('../utils/screenshotStorage');
 
+const MIN_ORDER_AMOUNT_PKR = 100;
+
 const requireId = (req, res, label) => {
   const id = req.params.id;
   if (!id || String(id).trim() === '') {
@@ -170,22 +172,37 @@ const getScreenshotUploadUrl = async (req, res) => {
 
 // POST /api/holder/orders/:id/proof
 // accepted becomes proof_submitted.
+// order_amount is the price without the card. The form prefills Sara's figure
+// and Ahmed may correct it here, together with the card charge.
 const submitProof = async (req, res) => {
   const holder_id = req.user.id;
   const order_id = requireId(req, res, 'Order id');
   if (!order_id) return;
 
-  const { screenshot_url, actual_amount_paid } = req.body;
+  const { screenshot_url, order_amount, actual_amount_paid } = req.body;
 
   const pathCheck = validateScreenshotPath(screenshot_url, order_id);
   if (!pathCheck.ok) {
     return res.status(400).json({ error: pathCheck.error });
   }
 
+  const original = Number(order_amount);
+  if (!Number.isInteger(original) || original <= MIN_ORDER_AMOUNT_PKR) {
+    return res.status(400).json({
+      error: `order_amount must be a whole number greater than ${MIN_ORDER_AMOUNT_PKR} PKR.`,
+    });
+  }
+
   const amount = Number(actual_amount_paid);
   if (!Number.isInteger(amount) || amount <= 0) {
     return res.status(400).json({
       error: 'actual_amount_paid must be a positive whole number (PKR).',
+    });
+  }
+
+  if (amount > original) {
+    return res.status(400).json({
+      error: 'actual_amount_paid cannot exceed the order amount.',
     });
   }
 
@@ -200,8 +217,8 @@ const submitProof = async (req, res) => {
     }
 
     const { rows } = await db.query(
-      'SELECT submit_proof($1, $2, $3, $4) AS result',
-      [order_id, holder_id, pathCheck.path, amount]
+      'SELECT submit_proof($1, $2, $3, $4, $5) AS result',
+      [order_id, holder_id, pathCheck.path, original, amount]
     );
     res.json(rows[0].result);
   } catch (err) {

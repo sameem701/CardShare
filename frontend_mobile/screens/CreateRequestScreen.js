@@ -15,6 +15,7 @@ import { useSession } from '../context/SessionContext';
 import { useToast } from '../context/ToastContext';
 import { asList } from '../utils/format';
 import { parseWholePkr, wholePkrFromInput } from '../utils/money';
+import { productUrlError } from '../utils/productUrl';
 
 export default function CreateRequestScreen({ onBack, onNavigate, onOpenCircle }) {
   const { sessionId, user } = useSession();
@@ -97,6 +98,11 @@ export default function CreateRequestScreen({ onBack, onNavigate, onOpenCircle }
       setError('Order amount must be a whole number greater than 100 PKR.');
       return;
     }
+    const linkError = productUrlError(productUrl);
+    if (linkError) {
+      setError(linkError);
+      return;
+    }
 
     setSubmitting(true);
     setError('');
@@ -139,7 +145,7 @@ export default function CreateRequestScreen({ onBack, onNavigate, onOpenCircle }
         </View>
       ) : (
         <View style={styles.pad}>
-          <Text style={styles.hint}>Pick a circle member who shares a card. You pay them outside the app after they submit proof.</Text>
+          <Text style={styles.hint}>Pick a circle member who shares a card. The amount is the price without the card, delivery included. After proof, you pay the card charge plus 20% of the discount.</Text>
           <Dropdown
             label="Card holder"
             placeholder="Choose someone"
@@ -157,7 +163,7 @@ export default function CreateRequestScreen({ onBack, onNavigate, onOpenCircle }
           <Field label="Merchant" value={merchant} onChangeText={setMerchant} placeholder="e.g. Daraz" />
           <Field label="Delivery address" value={address} onChangeText={setAddress} placeholder="Full address" multiline />
           <Field label="Product URL (optional)" value={productUrl} onChangeText={setProductUrl} placeholder="https://" />
-          <Field label="Order amount (PKR)" value={amount} onChangeText={onChangeAmount} placeholder="e.g. 2500" keyboardType="number-pad" />
+          <Field label="Price without the card (PKR)" value={amount} onChangeText={onChangeAmount} placeholder="e.g. 2500" keyboardType="number-pad" />
           <Field label="Note (optional)" value={note} onChangeText={setNote} placeholder="Anything they should know" />
           <ErrorBanner message={error} onRetry={friends.length === 0 ? loadFriends : undefined} />
           <PrimaryButton label="Send request" loading={submitting} onPress={submit} />

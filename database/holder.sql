@@ -177,14 +177,18 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Ahmed submits the receipt from an accepted request. Sara then accepts or rejects it.
+-- Ahmed submits the receipt from an accepted request. The original price is
+-- prefilled with Sara's figure; he can correct it here. Both numbers then lock.
+-- Sara accepts or rejects the proof. Reject keeps this corrected original price.
 DROP FUNCTION IF EXISTS start_shopping(VARCHAR, VARCHAR);
 DROP FUNCTION IF EXISTS submit_tracking(VARCHAR, VARCHAR, VARCHAR, INT);
+DROP FUNCTION IF EXISTS submit_proof(VARCHAR, VARCHAR, VARCHAR, INT);
 
 CREATE OR REPLACE FUNCTION submit_proof(
   p_request_id         VARCHAR(36),
   p_holder_id          VARCHAR(36),
   p_screenshot_url     VARCHAR(200),
+  p_order_amount       INT,
   p_actual_amount_paid INT
 ) RETURNS JSON AS $$
 DECLARE
@@ -195,8 +199,16 @@ BEGIN
     RAISE EXCEPTION 'A screenshot is required.';
   END IF;
 
+  IF p_order_amount IS NULL OR p_order_amount <= 100 THEN
+    RAISE EXCEPTION 'Order amount must be greater than 100 PKR.';
+  END IF;
+
   IF p_actual_amount_paid IS NULL OR p_actual_amount_paid <= 0 THEN
     RAISE EXCEPTION 'Actual amount paid must be greater than zero.';
+  END IF;
+
+  IF p_actual_amount_paid > p_order_amount THEN
+    RAISE EXCEPTION 'Actual amount paid cannot exceed the order amount.';
   END IF;
 
   SELECT * INTO v_request FROM requests
@@ -209,14 +221,11 @@ BEGIN
     RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
   END IF;
 
-  IF p_actual_amount_paid > v_request.order_amount THEN
-    RAISE EXCEPTION 'Actual amount paid cannot exceed the order amount.';
-  END IF;
-
   v_now := extract(epoch from now()) * 1000;
 
   UPDATE requests
-  SET screenshot_url     = TRIM(p_screenshot_url),
+  SET order_amount       = p_order_amount,
+      screenshot_url     = TRIM(p_screenshot_url),
       actual_amount_paid = p_actual_amount_paid,
       rq_status          = 'proof_submitted',
       updated_at         = v_now
@@ -225,7 +234,7 @@ BEGIN
   RETURN (
     SELECT row_to_json(r)
     FROM (
-      SELECT id, screenshot_url, actual_amount_paid, rq_status, updated_at
+      SELECT id, order_amount, screenshot_url, actual_amount_paid, rq_status, updated_at
       FROM requests WHERE id = p_request_id
     ) r
   );
@@ -328,6 +337,7 @@ BEGIN
         txn.bank_name,
         txn.card_tier,
         txn.actual_amount_paid,
+        txn.holder_share,
         txn.screenshot_url,
         txn.txn_status,
         txn.cancel_reason,
