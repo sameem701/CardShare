@@ -89,7 +89,9 @@ const getOrder = async (req, res) => {
       'SELECT get_request_holder($1, $2) AS result',
       [order_id, holder_id]
     );
-    res.json(await attachSignedScreenshotUrl(rows[0].result));
+    const order = await attachSignedScreenshotUrl(rows[0].result);
+    const counts = await unreadCountMap(holder_id);
+    res.json({ ...order, unread_count: counts.get(order.id) || 0 });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

@@ -263,7 +263,11 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
       ) : null}
 
       {canChatSendOnRequest(data.rq_status) ? (
-        <PrimaryButton label="Open chat" onPress={() => onNavigate('chat', { threadId: orderId, canSend: true })} />
+        <PrimaryButton
+          label="Open chat"
+          count={data.unread_count}
+          onPress={() => onNavigate('chat', { threadId: orderId, canSend: true })}
+        />
       ) : null}
 
       {holderCanSubmitProof(data.rq_status) ? (

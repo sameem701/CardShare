@@ -1,11 +1,14 @@
-import { Pressable, StyleSheet, Text } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import theme from '../constants/theme';
+import { unreadLabel } from '../utils/format';
 
-export default function PrimaryButton({ label, onPress, disabled, loading, compact }) {
+export default function PrimaryButton({ label, count, onPress, disabled, loading, compact }) {
+  const unread = unreadLabel(count);
+  const accessibilityLabel = unread ? `${label}, ${unread} unread` : label;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel}
       style={({ pressed }) => [
         styles.button,
         compact && styles.compact,
@@ -15,7 +18,14 @@ export default function PrimaryButton({ label, onPress, disabled, loading, compa
       onPress={onPress}
       disabled={disabled || loading}
     >
-      <Text style={styles.text}>{loading ? 'Please wait…' : label}</Text>
+      <View style={styles.row}>
+        <Text style={styles.text}>{loading ? 'Please wait…' : label}</Text>
+        {unread && !loading ? (
+          <View style={styles.count}>
+            <Text style={styles.countText}>{unread}</Text>
+          </View>
+        ) : null}
+      </View>
     </Pressable>
   );
 }
@@ -42,5 +52,25 @@ const styles = StyleSheet.create({
     fontFamily: theme.fonts.bodyMedium,
     fontSize: theme.fontSize.input,
     color: theme.colors.black,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.sm,
+  },
+  count: {
+    minWidth: 22,
+    height: 22,
+    paddingHorizontal: 6,
+    borderRadius: 11,
+    backgroundColor: theme.colors.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  countText: {
+    fontFamily: theme.fonts.bodyMedium,
+    fontSize: theme.fontSize.small,
+    color: theme.colors.white,
   },
 });

@@ -135,60 +135,64 @@ export default function RequestDetailRequesterScreen({ requestId, onBack, onNavi
     <ScreenShell onRefresh={() => { setRefreshing(true); load(); }} refreshing={refreshing}>
       <TopBar title={data.merchant} onBack={onBack} />
       <View style={styles.pad}>
-      <Badge
-        label={REQUEST_STATUS_LABELS[data.rq_status] || data.rq_status}
-        variant={requestStatusVariant(data.rq_status)}
-      />
-      <DetailCard>
-        <DetailRow label="Card holder" value={data.card_holder_name} />
-        <DetailRow label="Card" value={`${data.bank_name} · ${data.card_tier}`} />
-        <DetailRow label="Address" value={data.delivery_address} />
-        {data.product_url ? <DetailRow label="Product" value={data.product_url} link /> : null}
-        {data.note ? <DetailRow label="Note" value={data.note} /> : null}
-      </DetailCard>
-      <DetailCard>
-        <DetailRow label="Price without the card" value={formatPkr(data.order_amount)} />
-        {data.actual_amount_paid != null ? (
-          <DetailRow label="Paid on card" value={formatPkr(data.actual_amount_paid)} />
-        ) : null}
-        {data.actual_amount_paid != null && share != null ? (
-          <DetailRow label="Their share" value={formatPkr(share)} />
-        ) : null}
-        {owed != null ? <DetailRow label="You pay" value={formatPkr(owed)} highlight /> : null}
-        {kept != null ? <DetailRow label="You keep" value={formatPkr(kept)} /> : null}
-      </DetailCard>
-      {screenshot ? (
-        <View style={styles.proof}>
-          <Text style={styles.proofLabel}>Proof screenshot</Text>
-          <ProofImage uri={screenshot} style={styles.image} onReload={load} />
-        </View>
-      ) : null}
-      <Text style={styles.meta}>Updated {formatDate(data.updated_at)}</Text>
-
-      {canChatSendOnRequest(data.rq_status) ? (
-        <PrimaryButton label="Open chat" onPress={() => onNavigate('chat', { threadId: requestId, canSend: true })} />
-      ) : null}
-
-      {requesterCanReviewProof(data.rq_status) ? (
-        <View style={styles.stack}>
-          <PrimaryButton label="Accept proof" loading={working} onPress={doAcceptProof} />
-          <SecondaryButton label="Reject proof" disabled={working} onPress={() => setConfirmReject(true)} />
-        </View>
-      ) : null}
-
-      {requesterCanCancel(data.rq_status) ? (
-        <SecondaryButton
-          label="Cancel request"
-          danger
-          disabled={working}
-          onPress={() => {
-            if (requesterCancelNeedsReason(data.rq_status)) setCancelOpen(true);
-            else setConfirmCancel(true);
-          }}
+        <Badge
+          label={REQUEST_STATUS_LABELS[data.rq_status] || data.rq_status}
+          variant={requestStatusVariant(data.rq_status)}
         />
-      ) : null}
+        <DetailCard>
+          <DetailRow label="Card holder" value={data.card_holder_name} />
+          <DetailRow label="Card" value={`${data.bank_name} · ${data.card_tier}`} />
+          <DetailRow label="Address" value={data.delivery_address} />
+          {data.product_url ? <DetailRow label="Product" value={data.product_url} link /> : null}
+          {data.note ? <DetailRow label="Note" value={data.note} /> : null}
+        </DetailCard>
+        <DetailCard>
+          <DetailRow label="Price without the card" value={formatPkr(data.order_amount)} />
+          {data.actual_amount_paid != null ? (
+            <DetailRow label="Paid on card" value={formatPkr(data.actual_amount_paid)} />
+          ) : null}
+          {data.actual_amount_paid != null && share != null ? (
+            <DetailRow label="Their share" value={formatPkr(share)} />
+          ) : null}
+          {owed != null ? <DetailRow label="You pay" value={formatPkr(owed)} highlight /> : null}
+          {kept != null ? <DetailRow label="You keep" value={formatPkr(kept)} /> : null}
+        </DetailCard>
+        {screenshot ? (
+          <View style={styles.proof}>
+            <Text style={styles.proofLabel}>Proof screenshot</Text>
+            <ProofImage uri={screenshot} style={styles.image} onReload={load} />
+          </View>
+        ) : null}
+        <Text style={styles.meta}>Updated {formatDate(data.updated_at)}</Text>
 
-      <ErrorBanner message={error} onRetry={load} />
+        {canChatSendOnRequest(data.rq_status) ? (
+          <PrimaryButton
+            label="Open chat"
+            count={data.unread_count}
+            onPress={() => onNavigate('chat', { threadId: requestId, canSend: true })}
+          />
+        ) : null}
+
+        {requesterCanReviewProof(data.rq_status) ? (
+          <View style={styles.stack}>
+            <PrimaryButton label="Accept proof" loading={working} onPress={doAcceptProof} />
+            <SecondaryButton label="Reject proof" disabled={working} onPress={() => setConfirmReject(true)} />
+          </View>
+        ) : null}
+
+        {requesterCanCancel(data.rq_status) ? (
+          <SecondaryButton
+            label="Cancel request"
+            danger
+            disabled={working}
+            onPress={() => {
+              if (requesterCancelNeedsReason(data.rq_status)) setCancelOpen(true);
+              else setConfirmCancel(true);
+            }}
+          />
+        ) : null}
+
+        <ErrorBanner message={error} onRetry={load} />
       </View>
 
       <ConfirmDialog

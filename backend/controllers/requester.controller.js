@@ -112,7 +112,9 @@ const getRequest = async (req, res) => {
       'SELECT get_request_requester($1, $2) AS result',
       [request_id, requester_id]
     );
-    res.json(await attachSignedScreenshotUrl(rows[0].result));
+    const request = await attachSignedScreenshotUrl(rows[0].result);
+    const counts = await unreadCountMap(requester_id);
+    res.json({ ...request, unread_count: counts.get(request.id) || 0 });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
