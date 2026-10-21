@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { ALLOWED_BANKS, ALLOWED_CARD_TIERS, addCard } from '../api/cards';
 import Dropdown from '../components/Dropdown';
 import ErrorBanner from '../components/ErrorBanner';
@@ -9,8 +10,11 @@ import TopBar from '../components/TopBar';
 import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
 import { useToast } from '../context/ToastContext';
+import { queryClient } from '../queries/client';
 
-export default function AddCardScreen({ onBack, onSaved }) {
+export default function AddCardScreen() {
+  const navigation = useNavigation();
+  const goBack = () => navigation.goBack();
   const { sessionId, user } = useSession();
   const showToast = useToast();
   const [bank, setBank] = useState('');
@@ -33,7 +37,8 @@ export default function AddCardScreen({ onBack, onSaved }) {
     try {
       await addCard(sessionId, user.id, bank, tier);
       showToast('Card added');
-      onSaved();
+      await queryClient.invalidateQueries({ queryKey: ['home', user.id] });
+      goBack();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -43,7 +48,7 @@ export default function AddCardScreen({ onBack, onSaved }) {
 
   return (
     <ScreenShell>
-      <TopBar title="Add a card" onBack={onBack} />
+      <TopBar title="Add a card" onBack={goBack} />
       <View style={styles.scroll}>
         <Text style={styles.subtitle}>Bank and tier only. The card number stays with you.</Text>
         <Dropdown label="Bank" placeholder="Choose a bank" options={ALLOWED_BANKS} value={bank} onChange={setBank} />

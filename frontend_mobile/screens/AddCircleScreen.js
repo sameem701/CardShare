@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import TextField from '../components/TextField';
 import { sendCircleInvite } from '../api/circle';
 import { findUserByPhone } from '../api/profile';
@@ -10,9 +11,11 @@ import TopBar from '../components/TopBar';
 import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
 import { useToast } from '../context/ToastContext';
+import { queryClient } from '../queries/client';
 import { normalizePhone } from '../utils/phone';
 
-export default function AddCircleScreen({ onBack }) {
+export default function AddCircleScreen() {
+  const navigation = useNavigation();
   const { sessionId, user } = useSession();
   const showToast = useToast();
   const [phone, setPhone] = useState('');
@@ -43,7 +46,8 @@ export default function AddCircleScreen({ onBack }) {
       const found = await findUserByPhone(sessionId, user.id, trimmed);
       await sendCircleInvite(sessionId, user.id, found.id);
       showToast('Invite sent');
-      onBack();
+      await queryClient.invalidateQueries({ queryKey: ['circle', user.id] });
+      navigation.goBack();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -53,7 +57,7 @@ export default function AddCircleScreen({ onBack }) {
 
   return (
     <ScreenShell>
-      <TopBar title="Add to circle" onBack={onBack} />
+      <TopBar title="Add to circle" onBack={() => navigation.goBack()} />
       <View style={styles.scroll}>
         <Text style={styles.subtitle}>Find them by the phone number they use on CardCircle.</Text>
         <TextField

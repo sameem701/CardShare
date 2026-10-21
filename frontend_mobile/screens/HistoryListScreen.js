@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
 import { View } from 'react-native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { getHolderHistory } from '../api/holder';
 import { getRequesterHistory } from '../api/requester';
 import EmptyState from '../components/EmptyState';
@@ -10,40 +10,32 @@ import ScreenShell from '../components/ScreenShell';
 import TopBar from '../components/TopBar';
 import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
+import { openScreen } from '../navigation/openScreen';
+import { useScreenQuery } from '../queries/useScreenQuery';
 import { asList, formatDate, formatPkr } from '../utils/format';
 import { txnStatusLabel, txnStatusVariant } from '../utils/orderRules';
 
-export default function HistoryListScreen({ role, onBack, onNavigate }) {
+export default function HistoryListScreen() {
+  const navigation = useNavigation();
+  const { role } = useRoute().params;
   const { sessionId, user } = useSession();
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState('');
   const holder = role === 'holder';
-
-  const load = useCallback(async () => {
-    setError('');
-    try {
+  const list = useScreenQuery(
+    ['history-list', user?.id, role],
+    async ({ signal }) => {
       const rows = holder
-        ? await getHolderHistory(sessionId, user.id)
-        : await getRequesterHistory(sessionId, user.id);
-      setItems(asList(rows));
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+        ? await getHolderHistory(sessionId, user.id, { signal })
+        : await getRequesterHistory(sessionId, user.id, { signal });
+      return asList(rows);
     }
-  }, [holder, sessionId, user.id]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  );
+  const items = list.data || [];
+  const error = list.errorMessage;
 
   return (
-    <ScreenShell onRefresh={() => { setRefreshing(true); load(); }} refreshing={refreshing}>
-      <TopBar title={holder ? 'Orders on your cards' : 'Orders you requested'} onBack={onBack} />
-      {loading ? (
+    <ScreenShell onRefresh={() => list.refetch()} refreshing={list.refreshing}>
+      <TopBar title={holder ? 'Orders on your cards' : 'Orders you requested'} onBack={() => navigation.goBack()} />
+      {list.showLoading ? (
         <LoadingState />
       ) : items.length === 0 && !error ? (
         <View style={{ paddingHorizontal: theme.layout.screenPadding }}>
@@ -59,12 +51,12 @@ export default function HistoryListScreen({ role, onBack, onNavigate }) {
               : `${txn.card_holder_name || 'Card holder'} · ${formatPkr(txn.order_amount)} · ${formatDate(txn.created_at)}`}
             badgeLabel={txnStatusLabel(txn.txn_status, role)}
             badgeVariant={txnStatusVariant(txn.txn_status)}
-            onPress={() => onNavigate('transaction-detail', { txnId: txn.id, role, snapshot: txn })}
+            onPress={() => openScreen(navigation, 'transaction-detail', { txnId: txn.id, role })}
           />
         ))
       )}
       <View style={{ paddingHorizontal: theme.layout.screenPadding }}>
-        <ErrorBanner message={error} onRetry={load} />
+        <ErrorBanner message={error} onRetry={() => list.refetch()} />
       </View>
     </ScreenShell>
   );

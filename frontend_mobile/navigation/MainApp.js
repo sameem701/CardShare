@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import { BackHandler, Platform, View } from 'react-native';
+import { NavigationContainer, useNavigation, useNavigationContainerRef } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import BottomNav from '../components/BottomNav';
 import SideMenu from '../components/SideMenu';
-import { RequestInboxProvider, useRequestInbox } from '../context/RequestInbox';
 import AddCardScreen from '../screens/AddCardScreen';
 import AddCircleScreen from '../screens/AddCircleScreen';
 import CardDetailScreen from '../screens/CardDetailScreen';
@@ -10,189 +13,124 @@ import CircleScreen from '../screens/CircleScreen';
 import CreateRequestScreen from '../screens/CreateRequestScreen';
 import HistoryListScreen from '../screens/HistoryListScreen';
 import HistoryScreen from '../screens/HistoryScreen';
-import RequestsScreen from '../screens/RequestsScreen';
 import HomeScreen from '../screens/HomeScreen';
 import HowItWorksScreen from '../screens/HowItWorksScreen';
 import OrderDetailHolderScreen from '../screens/OrderDetailHolderScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import RequestDetailRequesterScreen from '../screens/RequestDetailRequesterScreen';
+import RequestsScreen from '../screens/RequestsScreen';
 import TransactionDetailScreen from '../screens/TransactionDetailScreen';
+import { AppActionsProvider } from './AppActions';
+import { screenId } from './openScreen';
+
+const Stack = createNativeStackNavigator();
+const Tab = createBottomTabNavigator();
+
+const stackOptions = {
+  headerShown: false,
+  freezeOnBlur: true,
+};
+
+function MainTabs() {
+  return (
+    <Tab.Navigator
+      tabBar={(props) => <BottomNav {...props} />}
+      screenOptions={{
+        headerShown: false,
+        freezeOnBlur: true,
+        lazy: false,
+        detachInactiveScreens: false,
+      }}
+    >
+      <Tab.Screen name="Home" component={HomeScreen} />
+      <Tab.Screen name="Request" component={RequestsScreen} />
+      <Tab.Screen name="Circle" component={CircleScreen} />
+    </Tab.Navigator>
+  );
+}
+
+function GuideScreen() {
+  const navigation = useNavigation();
+  const [step, setStep] = useState(0);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (event) => {
+      if (step === 0) return;
+      event.preventDefault();
+      setStep((current) => (current > 0 ? current - 1 : 0));
+    });
+    return unsubscribe;
+  }, [navigation, step]);
+
+  return (
+    <HowItWorksScreen
+      step={step}
+      onStep={setStep}
+      finishLabel="Done"
+      onBack={() => navigation.goBack()}
+      onContinue={() => navigation.goBack()}
+    />
+  );
+}
 
 function MainAppShell({ onLoggedOut }) {
-  const { load } = useRequestInbox();
-  const [tab, setTab] = useState('home');
-  const [stack, setStack] = useState([]);
+  const navigationRef = useNavigationContainerRef();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [guideOpen, setGuideOpen] = useState(false);
-  const [guideStep, setGuideStep] = useState(0);
+  const [tabsFocused, setTabsFocused] = useState(true);
 
-  const navigate = (screen, params = {}, options = {}) => {
-    setStack((current) => {
-      const next = { screen, params };
-      if (options.replace && current.length > 0) {
-        return [...current.slice(0, -1), next];
-      }
-      return [...current, next];
-    });
+  const syncTabs = () => {
+    const name = navigationRef.getCurrentRoute()?.name;
+    setTabsFocused(name === 'Home' || name === 'Request' || name === 'Circle');
   };
-  const goBack = () => setStack((current) => current.slice(0, -1));
-  const route = stack[stack.length - 1];
 
   useEffect(() => {
     if (Platform.OS !== 'android') return undefined;
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (menuOpen) {
-        setMenuOpen(false);
-        return true;
-      }
-      if (guideOpen) {
-        if (guideStep === 0) setGuideOpen(false);
-        else setGuideStep(guideStep - 1);
-        return true;
-      }
-      if (stack.length === 0) return false;
-      goBack();
+      if (!menuOpen) return false;
+      setMenuOpen(false);
       return true;
     });
     return () => subscription.remove();
-  }, [stack.length, menuOpen, guideOpen, guideStep]);
-
-  const openHistory = () => {
-    setMenuOpen(false);
-    navigate('history');
-  };
-
-  const openGuide = () => {
-    setMenuOpen(false);
-    setGuideStep(0);
-    setGuideOpen(true);
-  };
-
-  const closeGuide = () => setGuideOpen(false);
-
-  const openMenu = () => setMenuOpen(true);
-  const tabsVisible = stack.length === 0 && !guideOpen;
-
-  useEffect(() => {
-    if (tabsVisible) load();
-  }, [tabsVisible, load]);
-
-  let screen = null;
-  if (guideOpen) {
-    screen = (
-      <HowItWorksScreen
-        step={guideStep}
-        onStep={setGuideStep}
-        finishLabel="Done"
-        onBack={closeGuide}
-        onContinue={closeGuide}
-      />
-    );
-  } else if (route) {
-    switch (route.screen) {
-      case 'add-card':
-        screen = <AddCardScreen onBack={goBack} onSaved={goBack} />;
-        break;
-      case 'card-detail':
-        screen = <CardDetailScreen cardId={route.params.cardId} onBack={goBack} />;
-        break;
-      case 'add-circle':
-        screen = <AddCircleScreen onBack={goBack} />;
-        break;
-      case 'create-request':
-        screen = (
-          <CreateRequestScreen
-            onBack={goBack}
-            onNavigate={navigate}
-            onOpenCircle={() => {
-              setTab('circle');
-              goBack();
-            }}
-          />
-        );
-        break;
-      case 'history':
-        screen = <HistoryScreen onBack={goBack} onNavigate={navigate} />;
-        break;
-      case 'history-list':
-        screen = (
-          <HistoryListScreen
-            role={route.params.role}
-            onBack={goBack}
-            onNavigate={navigate}
-          />
-        );
-        break;
-      case 'order-detail':
-        screen = (
-          <OrderDetailHolderScreen
-            orderId={route.params.orderId}
-            onBack={goBack}
-            onNavigate={navigate}
-          />
-        );
-        break;
-      case 'request-detail':
-        screen = (
-          <RequestDetailRequesterScreen
-            requestId={route.params.requestId}
-            onBack={goBack}
-            onNavigate={navigate}
-          />
-        );
-        break;
-      case 'transaction-detail':
-        screen = (
-          <TransactionDetailScreen
-            txnId={route.params.txnId}
-            role={route.params.role}
-            snapshot={route.params.snapshot}
-            onBack={goBack}
-            onNavigate={navigate}
-          />
-        );
-        break;
-      case 'chat':
-        screen = (
-          <ChatScreen
-            threadId={route.params.threadId}
-            canSend={route.params.canSend}
-            onBack={goBack}
-          />
-        );
-        break;
-      case 'profile':
-        screen = <ProfileScreen onBack={goBack} onLoggedOut={onLoggedOut} />;
-        break;
-      default:
-        screen = null;
-    }
-  } else if (tab === 'circle') {
-    screen = <CircleScreen activeTab={tab} onTabPress={setTab} onNavigate={navigate} onMenu={openMenu} />;
-  } else if (tab === 'request') {
-    screen = <RequestsScreen activeTab={tab} onTabPress={setTab} onNavigate={navigate} onMenu={openMenu} />;
-  } else {
-    screen = <HomeScreen activeTab={tab} onTabPress={setTab} onNavigate={navigate} onMenu={openMenu} />;
-  }
+  }, [menuOpen]);
 
   return (
-    <View style={{ flex: 1 }}>
-      {screen}
-      <SideMenu
-        visible={menuOpen && !route && !guideOpen}
-        onClose={() => setMenuOpen(false)}
-        onHistory={openHistory}
-        onHowItWorks={openGuide}
-        onLoggedOut={onLoggedOut}
-      />
-    </View>
+    <AppActionsProvider value={{ openMenu: () => setMenuOpen(true), onLoggedOut }}>
+      <View style={{ flex: 1 }}>
+        <NavigationContainer ref={navigationRef} onReady={syncTabs} onStateChange={syncTabs}>
+          <Stack.Navigator screenOptions={stackOptions}>
+            <Stack.Screen name="Tabs" component={MainTabs} />
+            <Stack.Screen name="add-card" component={AddCardScreen} getId={screenId} />
+            <Stack.Screen name="card-detail" component={CardDetailScreen} getId={screenId} />
+            <Stack.Screen name="add-circle" component={AddCircleScreen} getId={screenId} />
+            <Stack.Screen name="create-request" component={CreateRequestScreen} getId={screenId} />
+            <Stack.Screen name="history" component={HistoryScreen} getId={screenId} />
+            <Stack.Screen name="history-list" component={HistoryListScreen} getId={screenId} />
+            <Stack.Screen name="order-detail" component={OrderDetailHolderScreen} getId={screenId} />
+            <Stack.Screen name="request-detail" component={RequestDetailRequesterScreen} getId={screenId} />
+            <Stack.Screen name="transaction-detail" component={TransactionDetailScreen} getId={screenId} />
+            <Stack.Screen name="chat" component={ChatScreen} getId={screenId} />
+            <Stack.Screen name="profile" component={ProfileScreen} getId={screenId} />
+            <Stack.Screen name="guide" component={GuideScreen} getId={screenId} />
+          </Stack.Navigator>
+        </NavigationContainer>
+        <SideMenu
+          visible={menuOpen && tabsFocused}
+          onClose={() => setMenuOpen(false)}
+          onHistory={() => {
+            setMenuOpen(false);
+            navigationRef.navigate('history');
+          }}
+          onHowItWorks={() => {
+            setMenuOpen(false);
+            navigationRef.navigate('guide');
+          }}
+          onLoggedOut={onLoggedOut}
+        />
+      </View>
+    </AppActionsProvider>
   );
 }
 
 export default function MainApp({ onLoggedOut }) {
-  return (
-    <RequestInboxProvider>
-      <MainAppShell onLoggedOut={onLoggedOut} />
-    </RequestInboxProvider>
-  );
+  return <MainAppShell onLoggedOut={onLoggedOut} />;
 }

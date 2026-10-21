@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { getMessages } from '../api/chat';
 import { useSession } from './SessionContext';
+import { registerChatCacheClear } from './clearChatCache';
 import { asList } from '../utils/format';
 import { CHAT_PAGE_SIZE } from '../utils/dashboard';
 
@@ -35,6 +36,14 @@ export function ChatProvider({ children }) {
   const threadsRef = useRef(threads);
   threadsRef.current = threads;
   const userId = user?.id;
+
+  useEffect(() => {
+    registerChatCacheClear(() => {
+      started.current.clear();
+      setThreads({});
+    });
+    return () => registerChatCacheClear(() => {});
+  }, []);
 
   const prefetch = useCallback((threadId) => {
     if (!sessionId || !userId || !threadId) return undefined;

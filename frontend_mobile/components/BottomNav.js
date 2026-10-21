@@ -12,35 +12,36 @@ function unreadLabel(count) {
 }
 
 const TABS = [
-  ['home', 'Home'],
-  ['request', 'Request'],
-  ['circle', 'Circle'],
+  ['Home', 'home', 'Home'],
+  ['Request', 'request', 'Request'],
+  ['Circle', 'circle', 'Circle'],
 ];
 
-export default function BottomNav({ activeTab, onTabPress }) {
+export default function BottomNav({ state, navigation }) {
   const bottomInset = useBottomInset();
   const { yourTurn, unreadTotal } = useRequestInbox();
   const unread = unreadLabel(unreadTotal);
+  const activeName = state.routes[state.index]?.name;
   return (
     <View style={[styles.nav, { paddingBottom: bottomInset }]}>
-      {TABS.map(([name, label]) => {
-        const active = name === activeTab;
+      {TABS.map(([routeName, icon, label]) => {
+        const active = routeName === activeName;
         const color = active ? theme.colors.green : theme.colors.text3;
-        const showTurn = name === 'request' && yourTurn;
-        const showUnread = name === 'request' && unread;
+        const showTurn = routeName === 'Request' && yourTurn;
+        const showUnread = routeName === 'Request' && unread;
         let accessibilityLabel = label;
         if (showTurn) accessibilityLabel += ', your turn';
         if (showUnread) accessibilityLabel += `, ${unread} unread`;
         return (
           <Pressable
-            key={name}
+            key={routeName}
             style={styles.item}
-            onPress={() => onTabPress(name)}
+            onPress={() => navigation.navigate(routeName)}
             accessibilityRole="button"
             accessibilityLabel={accessibilityLabel}
           >
             <View style={styles.iconWrap}>
-              <NavIcon name={name} color={color} />
+              <NavIcon name={icon} color={color} />
               {showTurn ? <View style={styles.turnDot} /> : null}
               {showUnread ? (
                 <View style={styles.unread}>

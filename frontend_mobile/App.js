@@ -4,11 +4,14 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts, Syne_700Bold } from '@expo-google-fonts/syne';
 import { DMSans_400Regular, DMSans_500Medium } from '@expo-google-fonts/dm-sans';
+import { QueryClientProvider } from '@tanstack/react-query';
 import theme from './constants/theme';
 import { ChatProvider } from './context/ChatCache';
 import { SessionProvider, useSession } from './context/SessionContext';
 import { ToastProvider } from './context/ToastContext';
 import MainApp from './navigation/MainApp';
+import { queryClient } from './queries/client';
+import './queries/focus';
 import LoadingState from './components/LoadingState';
 import StartScreen from './screens/StartScreen';
 import HowItWorksScreen from './screens/HowItWorksScreen';
@@ -121,6 +124,7 @@ export default function App() {
     <SafeAreaProvider>
       <View style={styles.page}>
         <View style={styles.phone}>
+          <QueryClientProvider client={queryClient}>
           <ToastProvider>
             <SessionProvider onRequireLogin={() => setLoginKey((k) => k + 1)} key={loginKey}>
               <ChatProvider>
@@ -128,6 +132,7 @@ export default function App() {
               </ChatProvider>
             </SessionProvider>
           </ToastProvider>
+        </QueryClientProvider>
         </View>
         <StatusBar style="light" />
       </View>

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { getHolderHistory } from '../api/holder';
 import { getRequesterHistory } from '../api/requester';
 import EmptyState from '../components/EmptyState';
@@ -10,43 +10,50 @@ import ScreenShell from '../components/ScreenShell';
 import TopBar from '../components/TopBar';
 import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
+import { openScreen } from '../navigation/openScreen';
+import { useScreenQuery } from '../queries/useScreenQuery';
 import { asList, formatDate, formatPkr } from '../utils/format';
 import { txnStatusLabel, txnStatusVariant } from '../utils/orderRules';
 
-export default function HistoryScreen({ onBack, onNavigate }) {
+export default function HistoryScreen() {
+  const navigation = useNavigation();
   const { sessionId, user } = useSession();
-  const [asRequester, setAsRequester] = useState([]);
-  const [asHolder, setAsHolder] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState('');
-
-  const load = useCallback(async () => {
-    const [req, hold] = await Promise.allSettled([
-      getRequesterHistory(sessionId, user.id),
-      getHolderHistory(sessionId, user.id),
-    ]);
-    if (req.status === 'fulfilled') setAsRequester(asList(req.value));
-    if (hold.status === 'fulfilled') setAsHolder(asList(hold.value));
-    const failed = [req, hold].filter((result) => result.status === 'rejected');
-    setError(failed.length ? failed[0].reason?.message || 'Could not load history.' : '');
-    setLoading(false);
-    setRefreshing(false);
-  }, [sessionId, user.id]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const empty = !loading && asRequester.length === 0 && asHolder.length === 0;
+  const history = useScreenQuery(
+    ['history', user?.id],
+    async ({ signal, client }) => {
+      const previous = client.getQueryData(['history', user.id]) || {};
+      const [req, hold] = await Promise.allSettled([
+        getRequesterHistory(sessionId, user.id, { signal }),
+        getHolderHistory(sessionId, user.id, { signal }),
+      ]);
+      if (signal?.aborted) {
+        const aborted = new Error('Aborted');
+        aborted.name = 'AbortError';
+        throw aborted;
+      }
+      const failed = [req, hold].filter((result) => result.status === 'rejected');
+      if (failed.length === 2) {
+        throw new Error(failed[0].reason?.message || 'Could not load history.');
+      }
+      return {
+        asRequester: req.status === 'fulfilled' ? asList(req.value) : (previous.asRequester || []),
+        asHolder: hold.status === 'fulfilled' ? asList(hold.value) : (previous.asHolder || []),
+        error: failed.length ? (failed[0].reason?.message || 'Could not load history.') : '',
+      };
+    }
+  );
+  const asRequester = history.data?.asRequester || [];
+  const asHolder = history.data?.asHolder || [];
+  const error = history.isError ? history.errorMessage : (history.data?.error || '');
+  const empty = !history.showLoading && asRequester.length === 0 && asHolder.length === 0;
 
   return (
     <ScreenShell
-      onRefresh={() => { setRefreshing(true); load(); }}
-      refreshing={refreshing}
+      onRefresh={() => history.refetch()}
+      refreshing={history.refreshing}
     >
-      <TopBar title="History" onBack={onBack} />
-      {loading ? (
+      <TopBar title="History" onBack={() => navigation.goBack()} />
+      {history.showLoading ? (
         <LoadingState />
       ) : empty && !error ? (
         <View style={styles.pad}>
@@ -59,7 +66,7 @@ export default function HistoryScreen({ onBack, onNavigate }) {
               <View style={styles.sectionRow}>
                 <Text style={styles.section}>Orders you requested</Text>
                 <Pressable
-                  onPress={() => onNavigate('history-list', { role: 'requester' })}
+                  onPress={() => openScreen(navigation, 'history-list', { role: 'requester' })}
                   accessibilityRole="button"
                   accessibilityLabel="See all orders you requested"
                 >
@@ -73,7 +80,7 @@ export default function HistoryScreen({ onBack, onNavigate }) {
                   subtitle={`${txn.card_holder_name || 'Card holder'} · ${formatPkr(txn.order_amount)} · ${formatDate(txn.created_at)}`}
                   badgeLabel={txnStatusLabel(txn.txn_status, 'requester')}
                   badgeVariant={txnStatusVariant(txn.txn_status)}
-                  onPress={() => onNavigate('transaction-detail', { txnId: txn.id, role: 'requester', snapshot: txn })}
+                  onPress={() => openScreen(navigation, 'transaction-detail', { txnId: txn.id, role: 'requester' })}
                 />
               ))}
             </>
@@ -83,7 +90,7 @@ export default function HistoryScreen({ onBack, onNavigate }) {
               <View style={styles.sectionRow}>
                 <Text style={styles.section}>Orders on your cards</Text>
                 <Pressable
-                  onPress={() => onNavigate('history-list', { role: 'holder' })}
+                  onPress={() => openScreen(navigation, 'history-list', { role: 'holder' })}
                   accessibilityRole="button"
                   accessibilityLabel="See all orders on your cards"
                 >
@@ -97,7 +104,7 @@ export default function HistoryScreen({ onBack, onNavigate }) {
                   subtitle={`${txn.requester_name || 'Someone'} · ${formatPkr(txn.order_amount)} · ${formatDate(txn.created_at)}`}
                   badgeLabel={txnStatusLabel(txn.txn_status, 'holder')}
                   badgeVariant={txnStatusVariant(txn.txn_status)}
-                  onPress={() => onNavigate('transaction-detail', { txnId: txn.id, role: 'holder', snapshot: txn })}
+                  onPress={() => openScreen(navigation, 'transaction-detail', { txnId: txn.id, role: 'holder' })}
                 />
               ))}
             </>
@@ -105,7 +112,7 @@ export default function HistoryScreen({ onBack, onNavigate }) {
         </>
       )}
       <View style={styles.pad}>
-        <ErrorBanner message={error} onRetry={() => { setRefreshing(true); load(); }} />
+        <ErrorBanner message={error} onRetry={() => history.refetch()} />
       </View>
     </ScreenShell>
   );

@@ -8,7 +8,20 @@ export function getMessages(sessionId, userId, threadId, page = {}) {
   }
   if (page.limit) params.set('limit', String(page.limit));
   const query = params.toString();
-  return apiRequest(`/api/chat/${threadId}${query ? `?${query}` : ''}`, { sessionId, userId });
+  return apiRequest(`/api/chat/${threadId}${query ? `?${query}` : ''}`, {
+    sessionId,
+    userId,
+    signal: page.signal,
+  });
+}
+
+export function markChatRead(sessionId, userId, threadId, messageId) {
+  return apiRequest(`/api/chat/${threadId}/read`, {
+    method: 'POST',
+    body: { message_id: messageId },
+    sessionId,
+    userId,
+  });
 }
 
 export function sendMessage(sessionId, userId, threadId, message, attachmentPath) {

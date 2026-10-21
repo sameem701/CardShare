@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { confirmPaid, getHolderHistory } from '../api/holder';
 import { getRequesterHistory } from '../api/requester';
 import LoadingState from '../components/LoadingState';
@@ -15,66 +16,63 @@ import theme from '../constants/theme';
 import { usePrefetchChat } from '../context/ChatCache';
 import { useSession } from '../context/SessionContext';
 import { useToast } from '../context/ToastContext';
+import { openScreen } from '../navigation/openScreen';
+import { queryClient } from '../queries/client';
+import { useScreenQuery } from '../queries/useScreenQuery';
 import { formatDate, formatPkr } from '../utils/format';
 import { amountKept, amountOwed, recordedShare } from '../utils/settlement';
 import { holderCanConfirmPaid, txnStatusLabel, txnStatusVariant } from '../utils/orderRules';
 
-export default function TransactionDetailScreen({ txnId, role, snapshot, onBack, onNavigate }) {
+export default function TransactionDetailScreen() {
+  const navigation = useNavigation();
+  const { txnId, role } = useRoute().params;
   const { sessionId, user } = useSession();
   const showToast = useToast();
-  const [data, setData] = useState(snapshot || null);
-  const [loading, setLoading] = useState(!snapshot);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState('');
+  const txn = useScreenQuery(
+    ['transaction', user?.id, role, txnId],
+    async ({ signal }) => {
+      const rows = role === 'holder'
+        ? await getHolderHistory(sessionId, user.id, { signal })
+        : await getRequesterHistory(sessionId, user.id, { signal });
+      return (Array.isArray(rows) ? rows : []).find((item) => item.id === txnId) || null;
+    }
+  );
+  const data = txn.data;
+  const [actionError, setActionError] = useState('');
   const [working, setWorking] = useState(false);
   const [confirmPaidOpen, setConfirmPaidOpen] = useState(false);
   usePrefetchChat(txnId, Boolean(data));
+  const error = actionError || txn.errorMessage;
 
-  const load = useCallback(async () => {
-    setError('');
-    try {
-      const rows =
-        role === 'holder'
-          ? await getHolderHistory(sessionId, user.id)
-          : await getRequesterHistory(sessionId, user.id);
-      const found = (Array.isArray(rows) ? rows : []).find((t) => t.id === txnId);
-      setData(found || null);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [sessionId, user.id, txnId, role]);
-
-  useEffect(() => {
-    if (snapshot) {
-      setData(snapshot);
-      setLoading(false);
-      return;
-    }
-    load();
-  }, [snapshot, load]);
+  const load = async () => {
+    await queryClient.invalidateQueries({ queryKey: ['history', user.id] });
+    await queryClient.invalidateQueries({ queryKey: ['history-list', user.id] });
+    await queryClient.invalidateQueries({ queryKey: ['home', user.id] });
+    return txn.refetch();
+  };
 
   const confirm = async () => {
     setWorking(true);
-    setError('');
+    setActionError('');
     try {
       await confirmPaid(sessionId, user.id, txnId);
       showToast('Marked as paid');
       setConfirmPaidOpen(false);
-      setData((current) => (current ? { ...current, txn_status: 'paid' } : current));
+      queryClient.setQueryData(['transaction', user.id, role, txnId], (current) => (
+        current ? { ...current, txn_status: 'paid' } : current
+      ));
+      await load();
     } catch (err) {
-      setError(err.message);
+      setActionError(err.message);
     } finally {
       setWorking(false);
     }
   };
 
-  if (loading) {
+  if (txn.showLoading) {
     return (
       <ScreenShell scroll={false}>
-        <TopBar title="Transaction" onBack={onBack} />
+        <TopBar title="Transaction" onBack={() => navigation.goBack()} />
         <LoadingState />
       </ScreenShell>
     );
@@ -83,7 +81,7 @@ export default function TransactionDetailScreen({ txnId, role, snapshot, onBack,
   if (!data) {
     return (
       <ScreenShell scroll={false}>
-        <TopBar title="Transaction" onBack={onBack} />
+        <TopBar title="Transaction" onBack={() => navigation.goBack()} />
         <ErrorBanner message={error || 'Transaction details are unavailable.'} onRetry={load} />
       </ScreenShell>
     );
@@ -96,8 +94,8 @@ export default function TransactionDetailScreen({ txnId, role, snapshot, onBack,
   const showAddress = role === 'requester' && data.delivery_address;
 
   return (
-    <ScreenShell onRefresh={() => { setRefreshing(true); load(); }} refreshing={refreshing}>
-      <TopBar title={data.merchant} onBack={onBack} />
+    <ScreenShell onRefresh={load} refreshing={txn.refreshing}>
+      <TopBar title={data.merchant} onBack={() => navigation.goBack()} />
       <View style={styles.pad}>
       <Badge
         label={txnStatusLabel(data.txn_status, role)}
@@ -133,7 +131,7 @@ export default function TransactionDetailScreen({ txnId, role, snapshot, onBack,
 
       <PrimaryButton
         label="View chat history"
-        onPress={() => onNavigate('chat', { threadId: txnId, canSend: false })}
+        onPress={() => openScreen(navigation, 'chat', { threadId: txnId, canSend: false })}
       />
 
       {role === 'holder' && holderCanConfirmPaid(data.txn_status) ? (

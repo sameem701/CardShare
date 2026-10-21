@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import {
   acceptProof,
   cancelRequest,
@@ -21,6 +22,10 @@ import theme from '../constants/theme';
 import { usePrefetchChat } from '../context/ChatCache';
 import { useSession } from '../context/SessionContext';
 import { useToast } from '../context/ToastContext';
+import { openScreen } from '../navigation/openScreen';
+import { queryClient } from '../queries/client';
+import { useOrderUnread } from '../queries/inbox';
+import { useScreenQuery } from '../queries/useScreenQuery';
 import { formatDate, formatPkr } from '../utils/format';
 import { amountKept, amountOwed, recordedShare } from '../utils/settlement';
 import {
@@ -32,12 +37,17 @@ import {
   requesterCancelNeedsReason,
 } from '../utils/orderRules';
 
-export default function RequestDetailRequesterScreen({ requestId, onBack, onNavigate }) {
+export default function RequestDetailRequesterScreen() {
+  const navigation = useNavigation();
+  const { requestId } = useRoute().params;
   const { sessionId, user } = useSession();
   const showToast = useToast();
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const request = useScreenQuery(
+    ['request', user?.id, requestId],
+    ({ signal }) => getRequest(sessionId, user.id, requestId, { signal })
+  );
+  const data = request.data;
+  const storedUnread = useOrderUnread(requestId);
   const [error, setError] = useState('');
   const [working, setWorking] = useState(false);
   const [confirmReject, setConfirmReject] = useState(false);
@@ -45,23 +55,12 @@ export default function RequestDetailRequesterScreen({ requestId, onBack, onNavi
   usePrefetchChat(requestId, Boolean(data) && canChatSendOnRequest(data?.rq_status));
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelError, setCancelError] = useState('');
+  const banner = error || (request.isError ? request.errorMessage : '');
 
-  const load = useCallback(async () => {
-    setError('');
-    try {
-      const row = await getRequest(sessionId, user.id, requestId);
-      setData(row);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [sessionId, user.id, requestId]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const load = async () => {
+    await queryClient.invalidateQueries({ queryKey: ['inbox', user.id] });
+    return request.refetch();
+  };
 
   const doCancel = async (reason) => {
     setWorking(true);
@@ -71,7 +70,7 @@ export default function RequestDetailRequesterScreen({ requestId, onBack, onNavi
       setCancelOpen(false);
       setConfirmCancel(false);
       showToast('Request cancelled');
-      onBack();
+      navigation.goBack();
     } catch (err) {
       setCancelError(err.message);
     } finally {
@@ -85,7 +84,7 @@ export default function RequestDetailRequesterScreen({ requestId, onBack, onNavi
     try {
       const result = await acceptProof(sessionId, user.id, requestId);
       showToast('Proof accepted');
-      onNavigate('transaction-detail', { txnId: result.txn_id, role: 'requester' }, { replace: true });
+      openScreen(navigation, 'transaction-detail', { txnId: result.txn_id, role: 'requester' }, { replace: true });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -108,10 +107,10 @@ export default function RequestDetailRequesterScreen({ requestId, onBack, onNavi
     }
   };
 
-  if (loading) {
+  if (request.showLoading) {
     return (
       <ScreenShell scroll={false}>
-        <TopBar title="Request" onBack={onBack} />
+        <TopBar title="Request" onBack={() => navigation.goBack()} />
         <LoadingState />
       </ScreenShell>
     );
@@ -120,8 +119,8 @@ export default function RequestDetailRequesterScreen({ requestId, onBack, onNavi
   if (!data) {
     return (
       <ScreenShell scroll={false}>
-        <TopBar title="Request" onBack={onBack} />
-        <ErrorBanner message={error || 'Request not found.'} onRetry={load} />
+        <TopBar title="Request" onBack={() => navigation.goBack()} />
+        <ErrorBanner message={banner || 'Request not found.'} onRetry={load} />
       </ScreenShell>
     );
   }
@@ -132,8 +131,8 @@ export default function RequestDetailRequesterScreen({ requestId, onBack, onNavi
   const screenshot = data.screenshot_signed_url || data.screenshot_url;
 
   return (
-    <ScreenShell onRefresh={() => { setRefreshing(true); load(); }} refreshing={refreshing}>
-      <TopBar title={data.merchant} onBack={onBack} />
+    <ScreenShell onRefresh={load} refreshing={request.refreshing}>
+      <TopBar title={data.merchant} onBack={() => navigation.goBack()} />
       <View style={styles.pad}>
         <Badge
           label={REQUEST_STATUS_LABELS[data.rq_status] || data.rq_status}
@@ -168,8 +167,8 @@ export default function RequestDetailRequesterScreen({ requestId, onBack, onNavi
         {canChatSendOnRequest(data.rq_status) ? (
           <PrimaryButton
             label="Open chat"
-            count={data.unread_count}
-            onPress={() => onNavigate('chat', { threadId: requestId, canSend: true })}
+            count={storedUnread ?? data.unread_count}
+            onPress={() => openScreen(navigation, 'chat', { threadId: requestId, canSend: true })}
           />
         ) : null}
 
@@ -192,7 +191,7 @@ export default function RequestDetailRequesterScreen({ requestId, onBack, onNavi
           />
         ) : null}
 
-        <ErrorBanner message={error} onRetry={load} />
+        <ErrorBanner message={banner} onRetry={load} />
       </View>
 
       <ConfirmDialog

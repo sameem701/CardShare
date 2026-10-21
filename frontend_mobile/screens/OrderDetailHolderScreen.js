@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import TextField from '../components/TextField';
 import * as ImagePicker from 'expo-image-picker';
 import {
@@ -25,6 +26,10 @@ import theme from '../constants/theme';
 import { usePrefetchChat } from '../context/ChatCache';
 import { useSession } from '../context/SessionContext';
 import { useToast } from '../context/ToastContext';
+import { openScreen } from '../navigation/openScreen';
+import { queryClient } from '../queries/client';
+import { useOrderUnread } from '../queries/inbox';
+import { useScreenQuery } from '../queries/useScreenQuery';
 import { formatDate, formatPkr } from '../utils/format';
 import { amountOwed, recordedShare } from '../utils/settlement';
 import {
@@ -38,12 +43,17 @@ import {
 import { parseWholePkr, wholePkrFromInput } from '../utils/money';
 import { prepareImage, uploadBlobToSignedUrl } from '../utils/upload';
 
-export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate }) {
+export default function OrderDetailHolderScreen() {
+  const navigation = useNavigation();
+  const { orderId } = useRoute().params;
   const { sessionId, user } = useSession();
   const showToast = useToast();
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const order = useScreenQuery(
+    ['order', user?.id, orderId],
+    ({ signal }) => getOrder(sessionId, user.id, orderId, { signal })
+  );
+  const data = order.data;
+  const storedUnread = useOrderUnread(orderId);
   const [error, setError] = useState('');
   const [working, setWorking] = useState(false);
   const [confirmDecline, setConfirmDecline] = useState(false);
@@ -55,22 +65,11 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
   const [originalReady, setOriginalReady] = useState(false);
   usePrefetchChat(orderId, Boolean(data) && canChatSendOnRequest(data?.rq_status));
 
-  const load = useCallback(async () => {
-    setError('');
-    try {
-      const row = await getOrder(sessionId, user.id, orderId);
-      setData(row);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [sessionId, user.id, orderId]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const load = async () => {
+    await queryClient.invalidateQueries({ queryKey: ['inbox', user.id] });
+    return order.refetch();
+  };
+  const banner = error || (order.isError ? order.errorMessage : '');
 
   useEffect(() => {
     if (!data || !holderCanSubmitProof(data.rq_status) || originalReady) return;
@@ -99,7 +98,7 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
       await declineOrder(sessionId, user.id, orderId);
       showToast('Request declined');
       setConfirmDecline(false);
-      onBack();
+      navigation.goBack();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -114,7 +113,7 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
       await cancelOrder(sessionId, user.id, orderId, reason);
       setCancelOpen(false);
       showToast('Order cancelled');
-      onBack();
+      navigation.goBack();
     } catch (err) {
       setCancelError(err.message);
     } finally {
@@ -188,10 +187,10 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
     }
   };
 
-  if (loading) {
+  if (order.showLoading) {
     return (
       <ScreenShell scroll={false}>
-        <TopBar title="Order" onBack={onBack} />
+        <TopBar title="Order" onBack={() => navigation.goBack()} />
         <LoadingState />
       </ScreenShell>
     );
@@ -200,8 +199,8 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
   if (!data) {
     return (
       <ScreenShell scroll={false}>
-        <TopBar title="Order" onBack={onBack} />
-        <ErrorBanner message={error || 'Order not found.'} onRetry={load} />
+        <TopBar title="Order" onBack={() => navigation.goBack()} />
+        <ErrorBanner message={banner || 'Order not found.'} onRetry={load} />
       </ScreenShell>
     );
   }
@@ -218,8 +217,8 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
   const previewOwed = amountOwed(preview);
 
   return (
-    <ScreenShell onRefresh={() => { setRefreshing(true); load(); }} refreshing={refreshing}>
-      <TopBar title={data.merchant} onBack={onBack} />
+    <ScreenShell onRefresh={load} refreshing={order.refreshing}>
+      <TopBar title={data.merchant} onBack={() => navigation.goBack()} />
       <View style={styles.pad}>
       <Badge
         label={REQUEST_STATUS_LABELS[data.rq_status] || data.rq_status}
@@ -265,8 +264,8 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
       {canChatSendOnRequest(data.rq_status) ? (
         <PrimaryButton
           label="Open chat"
-          count={data.unread_count}
-          onPress={() => onNavigate('chat', { threadId: orderId, canSend: true })}
+          count={storedUnread ?? data.unread_count}
+          onPress={() => openScreen(navigation, 'chat', { threadId: orderId, canSend: true })}
         />
       ) : null}
 
@@ -302,7 +301,7 @@ export default function OrderDetailHolderScreen({ orderId, onBack, onNavigate })
         <SecondaryButton label="Cancel order" danger disabled={working} onPress={() => setCancelOpen(true)} />
       ) : null}
 
-      <ErrorBanner message={error} onRetry={load} />
+      <ErrorBanner message={banner} onRetry={load} />
       </View>
 
       <ConfirmDialog

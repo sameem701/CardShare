@@ -1,11 +1,11 @@
 import { apiRequest } from './client';
 
-export function getActiveRequests(sessionId, userId) {
-  return apiRequest('/api/requester/requests', { sessionId, userId });
+export function getActiveRequests(sessionId, userId, options = {}) {
+  return apiRequest('/api/requester/requests', { sessionId, userId, signal: options.signal });
 }
 
-export function getRequest(sessionId, userId, requestId) {
-  return apiRequest(`/api/requester/requests/${requestId}`, { sessionId, userId });
+export function getRequest(sessionId, userId, requestId, options = {}) {
+  return apiRequest(`/api/requester/requests/${requestId}`, { sessionId, userId, signal: options.signal });
 }
 
 export function createRequest(sessionId, userId, payload) {
@@ -42,6 +42,6 @@ export function rejectProof(sessionId, userId, requestId) {
   });
 }
 
-export function getRequesterHistory(sessionId, userId) {
-  return apiRequest('/api/requester/history', { sessionId, userId });
+export function getRequesterHistory(sessionId, userId, options = {}) {
+  return apiRequest('/api/requester/history', { sessionId, userId, signal: options.signal });
 }

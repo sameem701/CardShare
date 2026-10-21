@@ -87,7 +87,6 @@ const getMessages = async (req, res) => {
       'SELECT get_messages($1, $2, $3, $4, $5) AS result',
       [request_id, user_id, page.beforeCreatedAt, page.beforeId, page.limit]
     );
-    await db.query('SELECT mark_chat_read($1, $2) AS result', [request_id, user_id]);
     res.json(await attachSignedChatImageUrls(rows[0].result ?? []));
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -158,4 +157,35 @@ const sendMessage = async (req, res) => {
   }
 };
 
-module.exports = { getMessages, getChatImageUploadUrl, sendMessage };
+// POST /api/chat/:request_id/read
+// Marks up to one message the caller is looking at. Does not run on fetch.
+const markRead = async (req, res) => {
+  const user_id = req.user.id;
+  const request_id = requireRequestId(req, res);
+  if (!request_id) return;
+
+  const message_id = req.body?.message_id ? String(req.body.message_id).trim() : '';
+  if (!message_id) {
+    return res.status(400).json({ error: 'message_id is required.' });
+  }
+
+  try {
+    const { rows } = await db.query(
+      'SELECT mark_chat_read($1, $2, $3) AS result',
+      [request_id, user_id, message_id]
+    );
+    const result = rows[0].result ?? {};
+    res.json({ unread_count: Number(result.unread_count) || 0 });
+  } catch (err) {
+    const message = err.message || 'Request failed.';
+    if (message.includes('access denied')) {
+      return res.status(403).json({ error: 'Request not found or access denied.' });
+    }
+    if (message.includes('Message not found')) {
+      return res.status(404).json({ error: 'Message not found.' });
+    }
+    res.status(400).json({ error: message });
+  }
+};
+
+module.exports = { getMessages, getChatImageUploadUrl, sendMessage, markRead };

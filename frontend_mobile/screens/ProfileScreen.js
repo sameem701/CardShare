@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import ErrorBanner from '../components/ErrorBanner';
 import ConfirmDialog from '../components/ConfirmDialog';
 import PrimaryButton from '../components/PrimaryButton';
@@ -7,9 +8,12 @@ import ScreenShell from '../components/ScreenShell';
 import TopBar from '../components/TopBar';
 import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
+import { useAppActions } from '../navigation/AppActions';
 import { formatDisplayName } from '../utils/initials';
 
-export default function ProfileScreen({ onBack, onLoggedOut }) {
+export default function ProfileScreen() {
+  const navigation = useNavigation();
+  const { onLoggedOut } = useAppActions();
   const { user, signOut } = useSession();
   const [error, setError] = useState('');
   const [working, setWorking] = useState(false);
@@ -30,7 +34,7 @@ export default function ProfileScreen({ onBack, onLoggedOut }) {
 
   return (
     <ScreenShell>
-      <TopBar title="Profile" onBack={onBack} />
+      <TopBar title="Profile" onBack={() => navigation.goBack()} />
       <View style={styles.pad}>
       <View style={styles.card}>
         <Text style={styles.label}>Name</Text>

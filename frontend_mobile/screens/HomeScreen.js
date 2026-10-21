@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { deleteCard, getCards, toggleCardSharing } from '../api/cards';
 import { getActiveOrders, getHolderHistory, getIncomingRequests } from '../api/holder';
 import { getActiveRequests, getRequesterHistory } from '../api/requester';
@@ -14,6 +15,10 @@ import TopBar from '../components/TopBar';
 import CardCarousel from '../components/CardCarousel';
 import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
+import { useAppActions } from '../navigation/AppActions';
+import { openScreen } from '../navigation/openScreen';
+import { useScreenQuery } from '../queries/useScreenQuery';
+import { queryClient } from '../queries/client';
 import { dashboardStats } from '../utils/dashboard';
 import { asList, formatPkr, sharingOn } from '../utils/format';
 import { amountOwed } from '../utils/settlement';
@@ -23,41 +28,37 @@ function reasonMessage(result, fallback) {
   return result.reason?.message || fallback;
 }
 
-export default function HomeScreen({ activeTab, onTabPress, onNavigate, onMenu }) {
+export default function HomeScreen() {
+  const navigation = useNavigation();
+  const { openMenu } = useAppActions();
   const { sessionId, user } = useSession();
-  const [cards, setCards] = useState([]);
-  const [recent, setRecent] = useState([]);
-  const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [cardsError, setCardsError] = useState('');
-  const [recentError, setRecentError] = useState('');
-  const [statsError, setStatsError] = useState('');
   const [cardToRemove, setCardToRemove] = useState(null);
   const [removing, setRemoving] = useState(false);
+  const [actionError, setActionError] = useState('');
 
-  const load = useCallback(async () => {
-    const [cardRows, incomingRows, holderOrders, sentRows, holderHistory, requesterHistory] = await Promise.allSettled([
-      getCards(sessionId, user.id),
-      getIncomingRequests(sessionId, user.id),
-      getActiveOrders(sessionId, user.id),
-      getActiveRequests(sessionId, user.id),
-      getHolderHistory(sessionId, user.id),
-      getRequesterHistory(sessionId, user.id),
-    ]);
+  const home = useScreenQuery(
+    ['home', user?.id],
+    async ({ signal, client }) => {
+      const previous = client.getQueryData(['home', user.id]) || {};
+      const [cardRows, incomingRows, holderOrders, sentRows, holderHistory, requesterHistory] = await Promise.allSettled([
+        getCards(sessionId, user.id, { signal }),
+        getIncomingRequests(sessionId, user.id, { signal }),
+        getActiveOrders(sessionId, user.id, { signal }),
+        getActiveRequests(sessionId, user.id, { signal }),
+        getHolderHistory(sessionId, user.id, { signal }),
+        getRequesterHistory(sessionId, user.id, { signal }),
+      ]);
+      if (signal?.aborted) {
+        const aborted = new Error('Aborted');
+        aborted.name = 'AbortError';
+        throw aborted;
+      }
 
-    if (cardRows.status === 'fulfilled') {
-      setCards(asList(cardRows.value));
-      setCardsError('');
-    } else {
-      setCardsError(reasonMessage(cardRows, 'Could not load cards.'));
-    }
+      const cards = cardRows.status === 'fulfilled' ? asList(cardRows.value) : (previous.cards || []);
+      const cardsError = cardRows.status === 'fulfilled' ? '' : reasonMessage(cardRows, 'Could not load cards.');
 
-    const recentResults = [incomingRows, holderOrders, sentRows, holderHistory];
-    const failed = recentResults.filter((result) => result.status === 'rejected');
-    if (failed.length === recentResults.length) {
-      setRecentError(reasonMessage(failed[0], 'Could not load recent orders.'));
-    } else {
+      const recentResults = [incomingRows, holderOrders, sentRows, holderHistory];
+      const failed = recentResults.filter((result) => result.status === 'rejected');
       const items = [];
       if (incomingRows.status === 'fulfilled') {
         items.push(
@@ -109,60 +110,87 @@ export default function HomeScreen({ activeTab, onTabPress, onNavigate, onMenu }
               subtitle: `${item.requester_name || 'Someone'} · ${formatPkr(amountOwed(item))} still to receive`,
               badge: TXN_STATUS_LABELS.unpaid,
               badgeVariant: txnStatusVariant('unpaid'),
-              nav: { screen: 'transaction-detail', params: { txnId: item.id, role: 'holder', snapshot: item } },
+              nav: { screen: 'transaction-detail', params: { txnId: item.id, role: 'holder' } },
             }))
         );
       }
       items.sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
-      setRecent(items);
-      setRecentError(failed.length ? 'Some recent orders could not be loaded.' : '');
+      const recent = failed.length === recentResults.length ? (previous.recent || []) : items;
+      const recentError = failed.length
+        ? (failed.length === recentResults.length
+          ? reasonMessage(failed[0], 'Could not load recent orders.')
+          : 'Some recent orders could not be loaded.')
+        : '';
+
+      const statsFailed = [holderHistory, requesterHistory].filter((result) => result.status === 'rejected');
+      const stats = statsFailed.length && previous.stats
+        ? previous.stats
+        : dashboardStats({
+          holderHistory: holderHistory.status === 'fulfilled' ? holderHistory.value : [],
+          requesterHistory: requesterHistory.status === 'fulfilled' ? requesterHistory.value : [],
+        });
+
+      return {
+        cards,
+        cardsError,
+        recent,
+        recentError,
+        stats,
+        statsError: statsFailed.length ? 'Some totals could not be loaded.' : '',
+      };
     }
+  );
 
-    const statsFailed = [holderHistory, requesterHistory].filter((result) => result.status === 'rejected');
-    setStats(dashboardStats({
-      holderHistory: holderHistory.status === 'fulfilled' ? holderHistory.value : [],
-      requesterHistory: requesterHistory.status === 'fulfilled' ? requesterHistory.value : [],
-    }));
-    setStatsError(statsFailed.length ? 'Some totals could not be loaded.' : '');
-
-    setLoading(false);
-    setRefreshing(false);
-  }, [sessionId, user.id]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const cards = home.data?.cards || [];
+  const recent = home.data?.recent || [];
+  const stats = home.data?.stats || null;
+  const cardsError = actionError || home.data?.cardsError || '';
+  const recentError = home.data?.recentError || '';
+  const statsError = home.data?.statsError || '';
 
   const onRefresh = () => {
-    setRefreshing(true);
-    load();
+    home.refetch();
   };
 
   const toggleSharing = async (card) => {
     const next = sharingOn(card.allow_sharing) ? 0 : 1;
-    setCards((current) => current.map((item) => (
-      item.id === card.id ? { ...item, allow_sharing: next } : item
-    )));
+    const patch = (allowSharing) => {
+      queryClient.setQueryData(['home', user.id], (current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          cards: (current.cards || []).map((item) => (
+            item.id === card.id ? { ...item, allow_sharing: allowSharing } : item
+          )),
+        };
+      });
+    };
+    patch(next);
+    setActionError('');
     try {
       await toggleCardSharing(sessionId, user.id, card.id);
     } catch (err) {
-      setCards((current) => current.map((item) => (
-        item.id === card.id ? { ...item, allow_sharing: card.allow_sharing } : item
-      )));
-      setCardsError(err.message);
+      patch(card.allow_sharing);
+      setActionError(err.message);
     }
   };
 
   const removeCard = async () => {
     if (!cardToRemove) return;
     setRemoving(true);
-    setCardsError('');
+    setActionError('');
     try {
       await deleteCard(sessionId, user.id, cardToRemove.id);
-      setCards((current) => current.filter((item) => item.id !== cardToRemove.id));
+      queryClient.setQueryData(['home', user.id], (current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          cards: (current.cards || []).filter((item) => item.id !== cardToRemove.id),
+        };
+      });
       setCardToRemove(null);
     } catch (err) {
-      setCardsError(err.message);
+      setActionError(err.message);
       setCardToRemove(null);
     } finally {
       setRemoving(false);
@@ -170,8 +198,8 @@ export default function HomeScreen({ activeTab, onTabPress, onNavigate, onMenu }
   };
 
   return (
-    <ScreenShell withNav activeTab={activeTab} onTabPress={onTabPress} onRefresh={onRefresh} refreshing={refreshing}>
-      <TopBar title="Home" displayName={user.display_name} onAccount={onMenu} />
+    <ScreenShell onRefresh={onRefresh} refreshing={home.refreshing}>
+      <TopBar title="Home" displayName={user.display_name} onAccount={openMenu} />
       <HomeStats stats={stats} />
       <View style={styles.pad}>
         <ErrorBanner message={statsError} onRetry={onRefresh} />
@@ -182,7 +210,7 @@ export default function HomeScreen({ activeTab, onTabPress, onNavigate, onMenu }
           <ErrorBanner message={cardsError} onRetry={onRefresh} />
         </View>
       ) : null}
-      {loading ? (
+      {home.showLoading ? (
         <LoadingState />
       ) : cards.length === 0 ? (
         <View style={styles.pad}>
@@ -199,7 +227,7 @@ export default function HomeScreen({ activeTab, onTabPress, onNavigate, onMenu }
       )}
       <Pressable
         style={styles.ghost}
-        onPress={() => onNavigate('add-card')}
+        onPress={() => openScreen(navigation, 'add-card')}
         accessibilityRole="button"
         accessibilityLabel="Add a card"
       >
@@ -207,7 +235,7 @@ export default function HomeScreen({ activeTab, onTabPress, onNavigate, onMenu }
       </Pressable>
 
       <Text style={styles.section}>Recent</Text>
-      {!loading && !recentError && recent.length === 0 ? (
+      {!home.showLoading && !recentError && recent.length === 0 ? (
         <View style={styles.pad}>
           <EmptyState message="No orders need attention." />
         </View>
@@ -219,7 +247,7 @@ export default function HomeScreen({ activeTab, onTabPress, onNavigate, onMenu }
             subtitle={item.subtitle}
             badgeLabel={item.badge}
             badgeVariant={item.badgeVariant}
-            onPress={() => onNavigate(item.nav.screen, item.nav.params)}
+            onPress={() => openScreen(navigation, item.nav.screen, item.nav.params)}
           />
         ))
       )}

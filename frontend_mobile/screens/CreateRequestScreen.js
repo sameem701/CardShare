@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import TextField from '../components/TextField';
 import { getCircle, getCircleCards } from '../api/circle';
 import { createRequest } from '../api/requester';
@@ -13,15 +14,17 @@ import TopBar from '../components/TopBar';
 import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
 import { useToast } from '../context/ToastContext';
+import { openCircle, openScreen } from '../navigation/openScreen';
+import { queryClient } from '../queries/client';
+import { useScreenQuery } from '../queries/useScreenQuery';
 import { asList } from '../utils/format';
 import { parseWholePkr, wholePkrFromInput } from '../utils/money';
 import { productUrlError } from '../utils/productUrl';
 
-export default function CreateRequestScreen({ onBack, onNavigate, onOpenCircle }) {
+export default function CreateRequestScreen() {
+  const navigation = useNavigation();
   const { sessionId, user } = useSession();
   const showToast = useToast();
-  const [friends, setFriends] = useState([]);
-  const [cards, setCards] = useState([]);
   const [friendId, setFriendId] = useState('');
   const [cardId, setCardId] = useState('');
   const [merchant, setMerchant] = useState('');
@@ -29,83 +32,60 @@ export default function CreateRequestScreen({ onBack, onNavigate, onOpenCircle }
   const [productUrl, setProductUrl] = useState('');
   const [note, setNote] = useState('');
   const [amount, setAmount] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
 
-  const loadFriends = useCallback(async () => {
-    setError('');
-    try {
-      const rows = await getCircle(sessionId, user.id);
-      const accepted = asList(rows).filter((m) => m.c_status === 'accepted');
-      setFriends(accepted);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [sessionId, user.id]);
-
-  useEffect(() => {
-    loadFriends();
-  }, [loadFriends]);
-
-  const loadCards = useCallback(async (id) => {
-    if (!id) {
-      setCards([]);
-      setCardId('');
-      return;
-    }
-    try {
-      const rows = await getCircleCards(sessionId, user.id, id);
-      setCards(asList(rows));
-      setCardId('');
-    } catch (err) {
-      setError(err.message);
-      setCards([]);
-    }
-  }, [sessionId, user.id]);
-
-  const onPickFriend = (id) => {
-    setFriendId(id);
-    loadCards(id);
-  };
+  const friendsQuery = useScreenQuery(
+    ['circle', user?.id],
+    async ({ signal }) => asList(await getCircle(sessionId, user.id, { signal }))
+  );
+  const cardsQuery = useScreenQuery(
+    ['circle-cards', user?.id, friendId],
+    async ({ signal }) => asList(await getCircleCards(sessionId, user.id, friendId, { signal })),
+    Boolean(friendId)
+  );
+  const friends = (friendsQuery.data || []).filter((member) => member.c_status === 'accepted');
+  const cards = friendId ? (cardsQuery.data || []) : [];
+  const error = actionError || friendsQuery.errorMessage || cardsQuery.errorMessage;
 
   const onChangeAmount = (value) => {
     const next = wholePkrFromInput(value);
     setAmount(next.amount);
-    if (next.rejectedDecimal) setError('Enter a whole number of PKR, without paisa.');
-    else setError('');
+    if (next.rejectedDecimal) setActionError('Enter a whole number of PKR, without paisa.');
+    else setActionError('');
+  };
+
+  const onPickFriend = (id) => {
+    setFriendId(id);
+    setCardId('');
   };
 
   const submit = async () => {
     const parsed = parseWholePkr(amount);
     if (!friendId || !cardId) {
-      setError('Choose who has the card and which card to use.');
+      setActionError('Choose who has the card and which card to use.');
       return;
     }
     if (!merchant.trim()) {
-      setError('Merchant is required.');
+      setActionError('Merchant is required.');
       return;
     }
     if (!address.trim()) {
-      setError('Delivery address is required.');
+      setActionError('Delivery address is required.');
       return;
     }
     if (parsed == null || parsed <= 100) {
-      setError('Order amount must be a whole number greater than 100 PKR.');
+      setActionError('Order amount must be a whole number greater than 100 PKR.');
       return;
     }
     const linkError = productUrlError(productUrl);
     if (linkError) {
-      setError(linkError);
+      setActionError(linkError);
       return;
     }
 
     setSubmitting(true);
-    setError('');
+    setActionError('');
     try {
       const created = await createRequest(sessionId, user.id, {
         card_holder_id: friendId,
@@ -117,9 +97,10 @@ export default function CreateRequestScreen({ onBack, onNavigate, onOpenCircle }
         note: note.trim() || null,
       });
       showToast('Request sent');
-      onNavigate('request-detail', { requestId: created.id }, { replace: true });
+      await queryClient.invalidateQueries({ queryKey: ['inbox', user.id] });
+      openScreen(navigation, 'request-detail', { requestId: created.id }, { replace: true });
     } catch (err) {
-      setError(err.message);
+      setActionError(err.message);
     } finally {
       setSubmitting(false);
     }
@@ -130,16 +111,16 @@ export default function CreateRequestScreen({ onBack, onNavigate, onOpenCircle }
 
   return (
     <ScreenShell
-      onRefresh={() => { setRefreshing(true); loadFriends(); }}
-      refreshing={refreshing}
+      onRefresh={() => friendsQuery.refetch()}
+      refreshing={friendsQuery.refreshing}
     >
-      <TopBar title="Request order" onBack={onBack} />
-      {loading ? (
+      <TopBar title="Request order" onBack={() => navigation.goBack()} />
+      {friendsQuery.showLoading ? (
         <LoadingState />
       ) : friends.length === 0 && !error ? (
         <View style={styles.pad}>
           <EmptyState message="Add someone to your circle first, and make sure they share a card." />
-          <Pressable onPress={onOpenCircle}>
+          <Pressable onPress={() => openCircle(navigation)}>
             <Text style={styles.link}>Go to Circle</Text>
           </Pressable>
         </View>
@@ -165,7 +146,7 @@ export default function CreateRequestScreen({ onBack, onNavigate, onOpenCircle }
           <Field label="Product URL (optional)" value={productUrl} onChangeText={setProductUrl} placeholder="https://" />
           <Field label="Price without the card (PKR)" value={amount} onChangeText={onChangeAmount} placeholder="e.g. 2500" keyboardType="number-pad" />
           <Field label="Note (optional)" value={note} onChangeText={setNote} placeholder="Anything they should know" />
-          <ErrorBanner message={error} onRetry={friends.length === 0 ? loadFriends : undefined} />
+          <ErrorBanner message={error} onRetry={friends.length === 0 ? () => friendsQuery.refetch() : undefined} />
           <PrimaryButton label="Send request" loading={submitting} onPress={submit} />
         </View>
       )}

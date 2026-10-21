@@ -26,8 +26,8 @@ export const ALLOWED_CARD_TIERS = [
   'World',
 ];
 
-export function getCards(sessionId, userId) {
-  return apiRequest('/api/cards', { sessionId, userId });
+export function getCards(sessionId, userId, options = {}) {
+  return apiRequest('/api/cards', { sessionId, userId, signal: options.signal });
 }
 
 export function addCard(sessionId, userId, bankName, cardTier) {

@@ -21,9 +21,14 @@ async function parseJsonResponse(response) {
   }
 }
 
-export async function apiRequest(path, { method = 'GET', body, sessionId, userId } = {}) {
+export async function apiRequest(path, { method = 'GET', body, sessionId, userId, signal } = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const onAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', onAbort);
+  }
 
   let response;
   try {
@@ -39,12 +44,18 @@ export async function apiRequest(path, { method = 'GET', body, sessionId, userId
     });
   } catch (error) {
     if (error?.name === 'AbortError') {
+      if (signal?.aborted) {
+        const aborted = new Error('Aborted');
+        aborted.name = 'AbortError';
+        throw aborted;
+      }
       throw new Error('Request timed out. Check that the backend is running.');
     }
 
     throw new Error(`Network error. Check that the backend is running at ${API_BASE_URL}.`);
   } finally {
     clearTimeout(timeoutId);
+    signal?.removeEventListener('abort', onAbort);
   }
 
   const payload = await parseJsonResponse(response);

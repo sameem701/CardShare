@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
+import { AppState, FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
+import { useIsFocused, useNavigation, useRoute } from '@react-navigation/native';
 import TextField from '../components/TextField';
 import { hiddenScrollProps } from '../utils/webChrome';
 import * as ImagePicker from 'expo-image-picker';
-import { getChatImageUploadUrl, sendMessage } from '../api/chat';
+import { getChatImageUploadUrl, markChatRead, sendMessage } from '../api/chat';
 import ErrorBanner from '../components/ErrorBanner';
 import LoadingState from '../components/LoadingState';
 import PrimaryButton from '../components/PrimaryButton';
@@ -13,15 +14,24 @@ import TopBar from '../components/TopBar';
 import theme from '../constants/theme';
 import { useChatCache } from '../context/ChatCache';
 import { useSession } from '../context/SessionContext';
+import { storeUnreadCount, useOrderUnread } from '../queries/inbox';
+import { accountGeneration } from '../queries/client';
 import { formatTime } from '../utils/format';
 import { prepareImage, uploadBlobToSignedUrl } from '../utils/upload';
 import { useBottomInset } from '../hooks/useTopInset';
 
-export default function ChatScreen({ threadId, canSend = false, onBack }) {
+export default function ChatScreen() {
+  const navigation = useNavigation();
+  const route = useRoute();
+  const threadId = route.params?.threadId;
+  const canSend = route.params?.canSend === true;
+  const focused = useIsFocused();
   const { sessionId, user } = useSession();
   const { threads, prefetch, refreshNewest, loadOlder } = useChatCache();
   const bottomInset = useBottomInset();
   const allowOlder = useRef(false);
+  const markedId = useRef(null);
+  const [appActive, setAppActive] = useState(AppState.currentState === 'active');
   const [text, setText] = useState('');
   const [working, setWorking] = useState(false);
   const [sendError, setSendError] = useState('');
@@ -29,16 +39,46 @@ export default function ChatScreen({ threadId, canSend = false, onBack }) {
   const messages = thread?.messages || [];
   const loading = !thread || thread.loading;
   const error = sendError || thread?.error || '';
+  const unread = useOrderUnread(threadId);
+  const newestId = messages.length ? messages[messages.length - 1].id : '';
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      setAppActive(state === 'active');
+    });
+    return () => subscription.remove();
+  }, []);
 
   useEffect(() => {
     prefetch(threadId);
   }, [prefetch, threadId]);
 
   useEffect(() => {
-    if (!canSend) return undefined;
+    if (!canSend || !focused || !appActive) return undefined;
     const id = setInterval(() => refreshNewest(threadId), 8000);
     return () => clearInterval(id);
-  }, [canSend, refreshNewest, threadId]);
+  }, [canSend, focused, appActive, refreshNewest, threadId]);
+
+  useEffect(() => {
+    if (!focused || !appActive || !newestId || !sessionId || !user?.id) return undefined;
+    if (markedId.current === newestId) return undefined;
+    if (unread === 0 && markedId.current == null) {
+      markedId.current = newestId;
+      return undefined;
+    }
+    let cancelled = false;
+    const generation = accountGeneration();
+    markChatRead(sessionId, user.id, threadId, newestId)
+      .then(async (result) => {
+        if (cancelled || generation !== accountGeneration()) return;
+        markedId.current = newestId;
+        await storeUnreadCount(user.id, threadId, result?.unread_count);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [focused, appActive, newestId, messages, unread, sessionId, user?.id, threadId]);
 
   const send = async () => {
     const trimmed = text.trim();
@@ -87,8 +127,11 @@ export default function ChatScreen({ threadId, canSend = false, onBack }) {
     <KeyboardAvoidingView
       style={styles.screen}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      pointerEvents={focused ? 'auto' : 'none'}
+      accessibilityElementsHidden={!focused}
+      importantForAccessibility={focused ? 'auto' : 'no-hide-descendants'}
     >
-      <TopBar title="Chat" onBack={onBack} />
+      <TopBar title="Chat" onBack={() => navigation.goBack()} />
       {loading && messages.length === 0 ? (
         <LoadingState />
       ) : (

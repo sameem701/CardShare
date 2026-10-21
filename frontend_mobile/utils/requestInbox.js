@@ -17,6 +17,7 @@ function askedItem(item) {
     subtitle: `You asked ${item.card_holder_name || 'them'} · ${formatPkr(item.order_amount)}`,
     badge: REQUEST_STATUS_LABELS[item.rq_status] || item.rq_status,
     badgeVariant: requestStatusVariant(item.rq_status),
+    id: item.id,
     unreadCount: Number(item.unread_count) || 0,
     nav: { screen: 'request-detail', params: { requestId: item.id } },
   };
@@ -32,6 +33,7 @@ function holdingItem(item, status) {
     subtitle: `${item.requester_name || 'Someone'} · ${formatPkr(item.order_amount)}`,
     badge: REQUEST_STATUS_LABELS[status] || status,
     badgeVariant: requestStatusVariant(status),
+    id: item.id,
     unreadCount: Number(item.unread_count) || 0,
     nav: { screen: 'order-detail', params: { orderId: item.id } },
   };

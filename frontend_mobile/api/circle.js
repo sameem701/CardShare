@@ -1,7 +1,7 @@
 import { apiRequest } from './client';
 
-export function getCircle(sessionId, userId) {
-  return apiRequest('/api/circle', { sessionId, userId });
+export function getCircle(sessionId, userId, options = {}) {
+  return apiRequest('/api/circle', { sessionId, userId, signal: options.signal });
 }
 
 export function sendCircleInvite(sessionId, userId, friendId) {
@@ -22,8 +22,8 @@ export function respondToCircleInvite(sessionId, userId, friendId, status) {
   });
 }
 
-export function getCircleCards(sessionId, userId, friendId) {
-  return apiRequest(`/api/circle/${friendId}/cards`, { sessionId, userId });
+export function getCircleCards(sessionId, userId, friendId, options = {}) {
+  return apiRequest(`/api/circle/${friendId}/cards`, { sessionId, userId, signal: options.signal });
 }
 
 export function removeFromCircle(sessionId, userId, friendId) {

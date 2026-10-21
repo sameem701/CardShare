@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import EmptyState from '../components/EmptyState';
 import ErrorBanner from '../components/ErrorBanner';
 import ListCard from '../components/ListCard';
@@ -9,7 +10,18 @@ import TopBar from '../components/TopBar';
 import theme from '../constants/theme';
 import { useRequestInbox } from '../context/RequestInbox';
 import { useSession } from '../context/SessionContext';
+import { useAppActions } from '../navigation/AppActions';
+import { openScreen } from '../navigation/openScreen';
 import { isYourTurn } from '../utils/requestInbox';
+
+function inFilter(item, id) {
+  if (id === 'urgent') return isYourTurn(item);
+  return item.role === id;
+}
+
+function filterHasUnread(items, id) {
+  return items.some((item) => inFilter(item, id) && Number(item.unreadCount) > 0);
+}
 
 const FILTERS = [
   ['urgent', 'Urgent'],
@@ -17,40 +29,41 @@ const FILTERS = [
   ['holding', 'As card holder'],
 ];
 
-export default function RequestsScreen({ activeTab, onTabPress, onNavigate, onMenu }) {
+export default function RequestsScreen() {
+  const navigation = useNavigation();
+  const { openMenu } = useAppActions();
   const { user } = useSession();
   const { items, loading, refreshing, error, refresh } = useRequestInbox();
   const [filter, setFilter] = useState('urgent');
 
-  const visible = items.filter((item) => (filter === 'urgent' ? isYourTurn(item) : item.role === filter));
+  const visible = items.filter((item) => inFilter(item, filter));
 
   return (
     <ScreenShell
-      withNav
-      activeTab={activeTab}
-      onTabPress={onTabPress}
       onRefresh={refresh}
       refreshing={refreshing}
     >
       <TopBar
         title="Requests"
         displayName={user.display_name}
-        onAccount={onMenu}
+        onAccount={openMenu}
         actionLabel="New"
-        onAction={() => onNavigate('create-request')}
+        onAction={() => openScreen(navigation, 'create-request')}
       />
       <View style={styles.filters}>
         {FILTERS.map(([id, label]) => {
           const selected = filter === id;
+          const unread = filterHasUnread(items, id);
           return (
             <Pressable
               key={id}
               onPress={() => setFilter(id)}
               style={[styles.chip, selected && styles.chipOn]}
               accessibilityRole="button"
-              accessibilityLabel={label}
+              accessibilityLabel={unread ? `${label}, unread messages` : label}
             >
               <Text style={[styles.chipText, selected && styles.chipTextOn]}>{label}</Text>
+              {unread ? <View style={styles.dot} /> : null}
             </Pressable>
           );
         })}
@@ -71,7 +84,7 @@ export default function RequestsScreen({ activeTab, onTabPress, onNavigate, onMe
             badgeVariant={item.badgeVariant}
             unreadCount={item.unreadCount}
             yourTurn={isYourTurn(item)}
-            onPress={() => onNavigate(item.nav.screen, item.nav.params)}
+            onPress={() => openScreen(navigation, item.nav.screen, item.nav.params)}
           />
         ))
       )}
@@ -91,6 +104,9 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.lg,
   },
   chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
     backgroundColor: theme.colors.bg3,
     borderRadius: theme.radius.pill,
     borderWidth: 0.5,
@@ -109,6 +125,12 @@ const styles = StyleSheet.create({
   },
   chipTextOn: {
     color: theme.colors.green,
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: theme.colors.red,
   },
   pad: {
     paddingHorizontal: theme.layout.screenPadding,

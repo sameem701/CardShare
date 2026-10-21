@@ -1,20 +1,18 @@
 import { Children } from 'react';
 import { KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { useIsFocused } from '@react-navigation/native';
 import theme from '../constants/theme';
 import { hiddenScrollProps } from '../utils/webChrome';
-import BottomNav from './BottomNav';
 
 export default function ScreenShell({
   children,
   scroll = true,
-  withNav = false,
-  activeTab,
-  onTabPress,
   contentContainerStyle,
   refreshControl,
   onRefresh,
   refreshing = false,
 }) {
+  const focused = useIsFocused();
   const items = Children.toArray(children);
   const header = items[0];
   const rest = items.slice(1);
@@ -42,10 +40,12 @@ export default function ScreenShell({
     <KeyboardAvoidingView
       style={styles.screen}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      pointerEvents={focused ? 'auto' : 'none'}
+      accessibilityElementsHidden={!focused}
+      importantForAccessibility={focused ? 'auto' : 'no-hide-descendants'}
     >
       {header}
       {body}
-      {withNav ? <BottomNav activeTab={activeTab} onTabPress={onTabPress} /> : null}
     </KeyboardAvoidingView>
   );
 }

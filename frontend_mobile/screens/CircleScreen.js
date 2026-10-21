@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { getCircle, respondToCircleInvite, removeFromCircle } from '../api/circle';
 import EmptyState from '../components/EmptyState';
 import ErrorBanner from '../components/ErrorBanner';
@@ -13,6 +14,10 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
 import { useToast } from '../context/ToastContext';
+import { useAppActions } from '../navigation/AppActions';
+import { openScreen } from '../navigation/openScreen';
+import { queryClient } from '../queries/client';
+import { useScreenQuery } from '../queries/useScreenQuery';
 import { asList } from '../utils/format';
 
 function circleBadge(member) {
@@ -21,43 +26,42 @@ function circleBadge(member) {
   return { label: 'Pending', variant: 'amber' };
 }
 
-export default function CircleScreen({ activeTab, onTabPress, onNavigate, onMenu }) {
+export default function CircleScreen() {
+  const navigation = useNavigation();
+  const { openMenu } = useAppActions();
   const { sessionId, user } = useSession();
   const showToast = useToast();
-  const [members, setMembers] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState('');
   const [workingId, setWorkingId] = useState(null);
   const [confirm, setConfirm] = useState(null);
+  const [actionError, setActionError] = useState('');
 
-  const load = useCallback(async () => {
-    setError('');
-    try {
-      const rows = await getCircle(sessionId, user.id);
-      setMembers(asList(rows));
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+  const circle = useScreenQuery(
+    ['circle', user?.id],
+    async ({ signal, client }) => {
+      try {
+        const rows = await getCircle(sessionId, user.id, { signal });
+        return asList(rows);
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        const previous = client.getQueryData(['circle', user.id]);
+        if (previous) throw err;
+        throw err;
+      }
     }
-  }, [sessionId, user.id]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  );
+  const members = circle.data || [];
+  const error = actionError || (circle.data ? '' : circle.errorMessage) || (circle.isError ? circle.errorMessage : '');
 
   const respond = async (friendId, status) => {
     setWorkingId(friendId);
-    setError('');
+    setActionError('');
     try {
       await respondToCircleInvite(sessionId, user.id, friendId, status);
       setConfirm(null);
       showToast(status === 'accepted' ? 'Invite accepted' : 'Invite declined');
-      await load();
+      await queryClient.invalidateQueries({ queryKey: ['circle', user.id] });
     } catch (err) {
-      setError(err.message);
+      setActionError(err.message);
     } finally {
       setWorkingId(null);
     }
@@ -65,14 +69,14 @@ export default function CircleScreen({ activeTab, onTabPress, onNavigate, onMenu
 
   const remove = async (friendId) => {
     setWorkingId(friendId);
-    setError('');
+    setActionError('');
     try {
       await removeFromCircle(sessionId, user.id, friendId);
       showToast('Removed from circle');
       setConfirm(null);
-      await load();
+      await queryClient.invalidateQueries({ queryKey: ['circle', user.id] });
     } catch (err) {
-      setError(err.message);
+      setActionError(err.message);
     } finally {
       setWorkingId(null);
     }
@@ -80,20 +84,17 @@ export default function CircleScreen({ activeTab, onTabPress, onNavigate, onMenu
 
   return (
     <ScreenShell
-      withNav
-      activeTab={activeTab}
-      onTabPress={onTabPress}
-      onRefresh={() => { setRefreshing(true); load(); }}
-      refreshing={refreshing}
+      onRefresh={() => circle.refetch()}
+      refreshing={circle.refreshing}
     >
       <TopBar
         title="Trusted Circle"
         displayName={user.display_name}
-        onAccount={onMenu}
+        onAccount={openMenu}
         actionLabel="+ Add"
-        onAction={() => onNavigate('add-circle')}
+        onAction={() => openScreen(navigation, 'add-circle')}
       />
-      {loading ? (
+      {circle.showLoading ? (
         <LoadingState />
       ) : members.length === 0 && !error ? (
         <View style={styles.pad}>
@@ -159,7 +160,7 @@ export default function CircleScreen({ activeTab, onTabPress, onNavigate, onMenu
         })
       )}
       <View style={styles.pad}>
-        <ErrorBanner message={error} onRetry={() => { setRefreshing(true); load(); }} />
+        <ErrorBanner message={error} onRetry={() => circle.refetch()} />
       </View>
       <ConfirmDialog
         visible={Boolean(confirm)}

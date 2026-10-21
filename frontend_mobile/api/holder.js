@@ -1,15 +1,15 @@
 import { apiRequest } from './client';
 
-export function getIncomingRequests(sessionId, userId) {
-  return apiRequest('/api/holder/incoming', { sessionId, userId });
+export function getIncomingRequests(sessionId, userId, options = {}) {
+  return apiRequest('/api/holder/incoming', { sessionId, userId, signal: options.signal });
 }
 
-export function getActiveOrders(sessionId, userId) {
-  return apiRequest('/api/holder/orders', { sessionId, userId });
+export function getActiveOrders(sessionId, userId, options = {}) {
+  return apiRequest('/api/holder/orders', { sessionId, userId, signal: options.signal });
 }
 
-export function getOrder(sessionId, userId, orderId) {
-  return apiRequest(`/api/holder/orders/${orderId}`, { sessionId, userId });
+export function getOrder(sessionId, userId, orderId, options = {}) {
+  return apiRequest(`/api/holder/orders/${orderId}`, { sessionId, userId, signal: options.signal });
 }
 
 export function acceptOrder(sessionId, userId, orderId) {
@@ -59,8 +59,8 @@ export function submitProof(sessionId, userId, orderId, screenshotUrl, orderAmou
   });
 }
 
-export function getHolderHistory(sessionId, userId) {
-  return apiRequest('/api/holder/history', { sessionId, userId });
+export function getHolderHistory(sessionId, userId, options = {}) {
+  return apiRequest('/api/holder/history', { sessionId, userId, signal: options.signal });
 }
 
 export function confirmPaid(sessionId, userId, txnId) {
