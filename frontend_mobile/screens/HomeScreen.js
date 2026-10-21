@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { deleteCard, getCards, toggleCardSharing } from '../api/cards';
-import { getCircle } from '../api/circle';
 import { getActiveOrders, getHolderHistory, getIncomingRequests } from '../api/holder';
 import { getActiveRequests, getRequesterHistory } from '../api/requester';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -38,14 +37,13 @@ export default function HomeScreen({ activeTab, onTabPress, onNavigate, onMenu }
   const [removing, setRemoving] = useState(false);
 
   const load = useCallback(async () => {
-    const [cardRows, incomingRows, holderOrders, sentRows, holderHistory, requesterHistory, circleRows] = await Promise.allSettled([
+    const [cardRows, incomingRows, holderOrders, sentRows, holderHistory, requesterHistory] = await Promise.allSettled([
       getCards(sessionId, user.id),
       getIncomingRequests(sessionId, user.id),
       getActiveOrders(sessionId, user.id),
       getActiveRequests(sessionId, user.id),
       getHolderHistory(sessionId, user.id),
       getRequesterHistory(sessionId, user.id),
-      getCircle(sessionId, user.id),
     ]);
 
     if (cardRows.status === 'fulfilled') {
@@ -120,11 +118,10 @@ export default function HomeScreen({ activeTab, onTabPress, onNavigate, onMenu }
       setRecentError(failed.length ? 'Some recent orders could not be loaded.' : '');
     }
 
-    const statsFailed = [holderHistory, requesterHistory, circleRows].filter((result) => result.status === 'rejected');
+    const statsFailed = [holderHistory, requesterHistory].filter((result) => result.status === 'rejected');
     setStats(dashboardStats({
       holderHistory: holderHistory.status === 'fulfilled' ? holderHistory.value : [],
       requesterHistory: requesterHistory.status === 'fulfilled' ? requesterHistory.value : [],
-      circle: circleRows.status === 'fulfilled' ? circleRows.value : [],
     }));
     setStatsError(statsFailed.length ? 'Some totals could not be loaded.' : '');
 

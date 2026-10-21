@@ -11,6 +11,7 @@ import { ToastProvider } from './context/ToastContext';
 import MainApp from './navigation/MainApp';
 import LoadingState from './components/LoadingState';
 import StartScreen from './screens/StartScreen';
+import HowItWorksScreen from './screens/HowItWorksScreen';
 import PhoneScreen from './screens/PhoneScreen';
 import VerifyScreen from './screens/VerifyScreen';
 import NameScreen from './screens/NameScreen';
@@ -21,6 +22,8 @@ const hasDisplayName = (user) => Boolean(user?.display_name && String(user.displ
 function AuthGate() {
   const { session, booting, signIn, signOut } = useSession();
   const [authScreen, setAuthScreen] = useState('start');
+  const [phoneBack, setPhoneBack] = useState('start');
+  const [howStep, setHowStep] = useState(0);
   const [phone, setPhone] = useState('');
 
   const onRequireLogin = useCallback(() => {
@@ -46,10 +49,24 @@ function AuthGate() {
     );
   }
 
+  if (authScreen === 'how') {
+    return (
+      <HowItWorksScreen
+        step={howStep}
+        onStep={setHowStep}
+        onBack={() => setAuthScreen('start')}
+        onContinue={() => {
+          setPhoneBack('how');
+          setAuthScreen('phone');
+        }}
+      />
+    );
+  }
+
   if (authScreen === 'phone') {
     return (
       <PhoneScreen
-        onBack={() => setAuthScreen('start')}
+        onBack={() => setAuthScreen(phoneBack)}
         onSent={(value) => {
           setPhone(value);
           setAuthScreen('verify');
@@ -70,7 +87,18 @@ function AuthGate() {
     );
   }
 
-  return <StartScreen onContinue={() => setAuthScreen('phone')} />;
+  return (
+    <StartScreen
+      onGetStarted={() => {
+        setHowStep(0);
+        setAuthScreen('how');
+      }}
+      onExistingAccount={() => {
+        setPhoneBack('start');
+        setAuthScreen('phone');
+      }}
+    />
+  );
 }
 
 export default function App() {

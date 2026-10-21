@@ -1,6 +1,7 @@
 const db = require('../config/db');
 const { normalizeProductUrl } = require('../utils/productUrl');
 const { attachSignedScreenshotUrl } = require('../utils/screenshotStorage');
+const { unreadCountMap, withUnreadCounts } = require('../utils/unreadCounts');
 
 const MIN_ORDER_AMOUNT_PKR = 100;
 
@@ -91,7 +92,9 @@ const getActiveRequests = async (req, res) => {
       'SELECT get_active_requests_requester($1) AS result',
       [requester_id]
     );
-    res.json(await withSignedScreenshots(rows[0].result ?? []));
+    const requests = await withSignedScreenshots(rows[0].result ?? []);
+    const counts = await unreadCountMap(requester_id);
+    res.json(withUnreadCounts(requests, counts));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

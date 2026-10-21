@@ -2,12 +2,27 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import theme from '../constants/theme';
 import Badge from './Badge';
 
-export default function ListCard({ title, subtitle, badgeLabel, badgeVariant, action, onPress }) {
+function unreadLabel(count) {
+  const value = Number(count) || 0;
+  if (value <= 0) return '';
+  if (value > 9) return '+9';
+  return String(value);
+}
+
+export default function ListCard({ title, subtitle, badgeLabel, badgeVariant, action, unreadCount, yourTurn, onPress }) {
+  const unread = unreadLabel(unreadCount);
+  const label = [title, yourTurn ? 'your turn' : '', unread ? `${unread} unread` : ''].filter(Boolean).join(', ');
   const inner = (
     <>
+      {yourTurn ? <View style={styles.turnEdge} /> : null}
       <View style={styles.row}>
         <Text style={styles.title}>{title}</Text>
         {action || (badgeLabel ? <Badge label={badgeLabel} variant={badgeVariant} /> : null)}
+        {unread ? (
+          <View style={styles.unread}>
+            <Text style={styles.unreadText}>{unread}</Text>
+          </View>
+        ) : null}
       </View>
       {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
     </>
@@ -19,7 +34,7 @@ export default function ListCard({ title, subtitle, badgeLabel, badgeVariant, ac
         style={({ pressed }) => [styles.card, pressed && styles.pressed]}
         onPress={onPress}
         accessibilityRole="button"
-        accessibilityLabel={title}
+        accessibilityLabel={label}
       >
         {inner}
       </Pressable>
@@ -38,7 +53,16 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.card,
     paddingHorizontal: theme.spacing.lg,
     paddingVertical: theme.spacing.lg,
+    overflow: 'hidden',
     ...theme.shadows.card,
+  },
+  turnEdge: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 3,
+    backgroundColor: theme.colors.green,
   },
   pressed: {
     opacity: 0.9,
@@ -60,5 +84,19 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.body,
     color: theme.colors.text2,
     marginTop: theme.spacing.xs,
+  },
+  unread: {
+    minWidth: 22,
+    height: 22,
+    paddingHorizontal: 6,
+    borderRadius: 11,
+    backgroundColor: theme.colors.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unreadText: {
+    fontFamily: theme.fonts.bodyMedium,
+    fontSize: theme.fontSize.small,
+    color: theme.colors.white,
   },
 });

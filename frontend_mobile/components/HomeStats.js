@@ -1,29 +1,120 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import theme from '../constants/theme';
 import { formatPkr } from '../utils/format';
 
+function lifetimeLine(count) {
+  return `${count} lifetime ${count === 1 ? 'order' : 'orders'}`;
+}
+
+function pkrParts(amount) {
+  const formatted = formatPkr(amount);
+  if (!formatted.startsWith('PKR ')) return { label: '', value: formatted };
+  return { label: 'PKR', value: formatted.slice(4) };
+}
+
+function MonthMoney({ amount }) {
+  const { label, value } = pkrParts(amount);
+  return (
+    <View>
+      {label ? <Text style={styles.tileCurrency}>{label}</Text> : null}
+      <Text style={[styles.figure, styles.green]}>{value}</Text>
+    </View>
+  );
+}
+
+function TotalMoney({ amount }) {
+  const { label, value } = pkrParts(amount);
+  if (!label) {
+    return <Text style={styles.amount}>{value}</Text>;
+  }
+  return (
+    <Text style={styles.currency}>
+      PKR <Text style={styles.amount}>{value}</Text>
+    </Text>
+  );
+}
+
 export default function HomeStats({ stats }) {
+  const scroller = useRef(null);
+  const [page, setPage] = useState(0);
+  const [width, setWidth] = useState(0);
+
   if (!stats) return null;
+
+  const showPage = (index) => {
+    setPage(index);
+    if (width > 0) scroller.current?.scrollTo({ x: index * width, animated: true });
+  };
+
   return (
     <View style={styles.wrap}>
-      <View style={styles.hero}>
-        <Text style={styles.kicker}>Total received</Text>
-        <Text style={styles.total}>{formatPkr(stats.earnedAll)}</Text>
-        <Text style={styles.count}>{stats.paidCountMonth} paid orders this month</Text>
+      <View onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
+        {width > 0 ? (
+          <ScrollView
+            ref={scroller}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            decelerationRate="fast"
+            snapToInterval={width}
+            snapToAlignment="start"
+            disableIntervalMomentum
+            onMomentumScrollEnd={(event) => {
+              const next = Math.round(event.nativeEvent.contentOffset.x / width);
+              setPage(next === 1 ? 1 : 0);
+            }}
+          >
+            <View style={[styles.page, { width }]}>
+              <View style={styles.hero}>
+                <Text style={styles.kicker}>Total earned</Text>
+                <TotalMoney amount={stats.earnedAll} />
+                <Text style={styles.sub}>{lifetimeLine(stats.holderOrders)}</Text>
+              </View>
+              <View style={styles.row}>
+                <View style={styles.tile}>
+                  <MonthMoney amount={stats.earnedMonth} />
+                  <Text style={styles.caption}>Earned this month</Text>
+                </View>
+                <View style={styles.tile}>
+                  <Text style={[styles.figure, styles.count]}>{stats.holderOrdersMonth}</Text>
+                  <Text style={styles.caption}>Orders this month</Text>
+                </View>
+              </View>
+            </View>
+            <View style={[styles.page, { width }]}>
+              <View style={styles.hero}>
+                <Text style={styles.kicker}>Total saved</Text>
+                <TotalMoney amount={stats.savedAll} />
+                <Text style={styles.sub}>{lifetimeLine(stats.requesterOrders)}</Text>
+              </View>
+              <View style={styles.row}>
+                <View style={styles.tile}>
+                  <MonthMoney amount={stats.savedMonth} />
+                  <Text style={styles.caption}>Saved this month</Text>
+                </View>
+                <View style={styles.tile}>
+                  <Text style={[styles.figure, styles.count]}>{stats.requesterOrdersMonth}</Text>
+                  <Text style={styles.caption}>Orders this month</Text>
+                </View>
+              </View>
+            </View>
+          </ScrollView>
+        ) : null}
       </View>
-      <View style={styles.row}>
-        <View style={styles.tile}>
-          <Text style={[styles.figure, styles.green]}>{formatPkr(stats.savedMonth)}</Text>
-          <Text style={styles.caption}>Others saved</Text>
-        </View>
-        <View style={styles.tile}>
-          <Text style={styles.figure}>{formatPkr(stats.earnedMonth)}</Text>
-          <Text style={styles.caption}>Received this month</Text>
-        </View>
-        <View style={styles.tile}>
-          <Text style={[styles.figure, styles.circleFigure]}>{stats.circleCount}</Text>
-          <Text style={styles.caption}>In circle</Text>
-        </View>
+      <View style={styles.dots}>
+        <Pressable
+          onPress={() => showPage(0)}
+          style={[styles.dot, page === 0 && styles.dotOn]}
+          accessibilityRole="button"
+          accessibilityLabel="Earned"
+        />
+        <Pressable
+          onPress={() => showPage(1)}
+          style={[styles.dot, page === 1 && styles.dotOn]}
+          accessibilityRole="button"
+          accessibilityLabel="Saved"
+        />
       </View>
     </View>
   );
@@ -32,8 +123,10 @@ export default function HomeStats({ stats }) {
 const styles = StyleSheet.create({
   wrap: {
     paddingHorizontal: theme.layout.screenPadding,
-    gap: theme.spacing.md,
     marginBottom: theme.spacing.lg,
+  },
+  page: {
+    gap: theme.spacing.md,
   },
   hero: {
     backgroundColor: theme.colors.bg2,
@@ -50,13 +143,19 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginBottom: theme.spacing.sm,
   },
-  total: {
+  currency: {
     fontFamily: theme.fonts.display,
-    fontSize: theme.fontSize.display,
-    lineHeight: theme.lineHeight.display,
+    fontSize: 30,
+    lineHeight: 44,
     color: theme.colors.text,
   },
-  count: {
+  amount: {
+    fontFamily: theme.fonts.display,
+    fontSize: 42,
+    lineHeight: 46,
+    color: theme.colors.text,
+  },
+  sub: {
     fontFamily: theme.fonts.body,
     fontSize: theme.fontSize.body,
     color: theme.colors.text2,
@@ -76,15 +175,21 @@ const styles = StyleSheet.create({
     minHeight: 88,
     justifyContent: 'space-between',
   },
+  tileCurrency: {
+    fontFamily: theme.fonts.display,
+    fontSize: 18,
+    color: theme.colors.green,
+    marginBottom: 2,
+  },
   figure: {
     fontFamily: theme.fonts.display,
-    fontSize: theme.fontSize.title,
+    fontSize: 18,
     color: theme.colors.text,
   },
   green: {
     color: theme.colors.green,
   },
-  circleFigure: {
+  count: {
     fontSize: theme.fontSize.hero,
     lineHeight: theme.lineHeight.hero,
   },
@@ -93,5 +198,21 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.caption,
     color: theme.colors.text2,
     marginTop: theme.spacing.sm,
+  },
+  dots: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.sm,
+  },
+  dot: {
+    width: 7,
+    height: 7,
+    borderRadius: 7,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+  },
+  dotOn: {
+    width: 18,
+    backgroundColor: theme.colors.green,
   },
 });

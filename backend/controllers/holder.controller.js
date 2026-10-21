@@ -6,6 +6,7 @@ const {
   attachSignedScreenshotUrl,
   verifyScreenshotFile,
 } = require('../utils/screenshotStorage');
+const { unreadCountMap, withUnreadCounts } = require('../utils/unreadCounts');
 
 const MIN_ORDER_AMOUNT_PKR = 100;
 
@@ -51,7 +52,8 @@ const getIncomingRequests = async (req, res) => {
       'SELECT get_incoming_requests($1) AS result',
       [holder_id]
     );
-    res.json(rows[0].result ?? []);
+    const counts = await unreadCountMap(holder_id);
+    res.json(withUnreadCounts(rows[0].result ?? [], counts));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -67,7 +69,9 @@ const getActiveOrders = async (req, res) => {
       'SELECT get_active_orders_holder($1) AS result',
       [holder_id]
     );
-    res.json(await withSignedScreenshots(rows[0].result ?? []));
+    const orders = await withSignedScreenshots(rows[0].result ?? []);
+    const counts = await unreadCountMap(holder_id);
+    res.json(withUnreadCounts(orders, counts));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

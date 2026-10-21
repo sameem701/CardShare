@@ -87,6 +87,7 @@ const getMessages = async (req, res) => {
       'SELECT get_messages($1, $2, $3, $4, $5) AS result',
       [request_id, user_id, page.beforeCreatedAt, page.beforeId, page.limit]
     );
+    await db.query('SELECT mark_chat_read($1, $2) AS result', [request_id, user_id]);
     res.json(await attachSignedChatImageUrls(rows[0].result ?? []));
   } catch (err) {
     res.status(400).json({ error: err.message });

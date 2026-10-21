@@ -1,5 +1,5 @@
 import { asList } from './format';
-import { amountKept, amountOwed } from './settlement';
+import { amountKept, recordedShare } from './settlement';
 
 export const CHAT_PAGE_SIZE = 30;
 
@@ -11,27 +11,39 @@ export function isThisMonth(ms) {
   return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
 }
 
-export function dashboardStats({ holderHistory, requesterHistory, circle }) {
-  const held = asList(holderHistory);
-  const asked = asList(requesterHistory);
-  const paidHeld = held.filter((txn) => txn.txn_status === 'paid');
-  const paidHeldThisMonth = paidHeld.filter((txn) => isThisMonth(txn.updated_at || txn.created_at));
-  const paidAskedThisMonth = asked.filter(
-    (txn) => txn.txn_status === 'paid' && isThisMonth(txn.updated_at || txn.created_at)
-  );
+function paidRows(rows) {
+  return asList(rows).filter((txn) => txn.txn_status === 'paid');
+}
+
+function inThisMonth(txn) {
+  return isThisMonth(txn.updated_at || txn.created_at);
+}
+
+function sum(rows, pick) {
+  return rows.reduce((total, txn) => total + (pick(txn) || 0), 0);
+}
+
+export function dashboardStats({ holderHistory, requesterHistory }) {
+  const paidHeld = paidRows(holderHistory);
+  const paidAsked = paidRows(requesterHistory);
+  const heldMonth = paidHeld.filter(inThisMonth);
+  const askedMonth = paidAsked.filter(inThisMonth);
 
   const earnedByCard = {};
   paidHeld.forEach((txn) => {
     if (!txn.card_id) return;
-    earnedByCard[txn.card_id] = (earnedByCard[txn.card_id] || 0) + (amountOwed(txn) || 0);
+    earnedByCard[txn.card_id] = (earnedByCard[txn.card_id] || 0) + (recordedShare(txn) || 0);
   });
 
   return {
-    earnedAll: paidHeld.reduce((sum, txn) => sum + (amountOwed(txn) || 0), 0),
-    earnedMonth: paidHeldThisMonth.reduce((sum, txn) => sum + (amountOwed(txn) || 0), 0),
-    savedMonth: paidHeldThisMonth.reduce((sum, txn) => sum + (amountKept(txn) || 0), 0),
-    paidCountMonth: paidHeldThisMonth.length + paidAskedThisMonth.length,
-    circleCount: asList(circle).filter((member) => member.c_status === 'accepted').length,
+    earnedAll: sum(paidHeld, recordedShare),
+    earnedMonth: sum(heldMonth, recordedShare),
+    holderOrders: paidHeld.length,
+    holderOrdersMonth: heldMonth.length,
+    savedAll: sum(paidAsked, amountKept),
+    savedMonth: sum(askedMonth, amountKept),
+    requesterOrders: paidAsked.length,
+    requesterOrdersMonth: askedMonth.length,
     earnedByCard,
   };
 }

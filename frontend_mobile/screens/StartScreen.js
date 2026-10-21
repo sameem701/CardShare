@@ -4,7 +4,7 @@ import PrimaryButton from '../components/PrimaryButton';
 import SecondaryButton from '../components/SecondaryButton';
 import theme from '../constants/theme';
 
-export default function StartScreen({ onContinue }) {
+export default function StartScreen({ onGetStarted, onExistingAccount }) {
   return (
     <View style={styles.onboard}>
       <View style={styles.mark}>
@@ -16,15 +16,12 @@ export default function StartScreen({ onContinue }) {
         </Svg>
       </View>
       <Text style={styles.title}>
-        Lend your{'\n'}discounts.{'\n'}
-        <Text style={styles.titleAccent}>Earn passively.</Text>
-      </Text>
-      <Text style={styles.body}>
-        Share your card discounts with people you trust. Get paid for having a discount.
+        Use their card discounts.{'\n'}
+        <Text style={styles.titleAccent}>Make money from yours.</Text>
       </Text>
       <View style={styles.actions}>
-        <PrimaryButton label="Get started" onPress={onContinue} />
-        <SecondaryButton label="I already have an account" onPress={onContinue} />
+        <PrimaryButton label="Get started" onPress={onGetStarted} />
+        <SecondaryButton label="I already have an account" onPress={onExistingAccount} />
       </View>
     </View>
   );
@@ -54,19 +51,10 @@ const styles = StyleSheet.create({
     lineHeight: theme.lineHeight.display,
     textAlign: 'center',
     color: theme.colors.text,
-    marginBottom: theme.spacing.md,
+    marginBottom: 36,
   },
   titleAccent: {
     color: theme.colors.green,
-  },
-  body: {
-    fontFamily: theme.fonts.body,
-    fontSize: theme.fontSize.input,
-    lineHeight: theme.lineHeight.body,
-    textAlign: 'center',
-    color: theme.colors.text2,
-    maxWidth: theme.layout.copyMaxWidth,
-    marginBottom: theme.spacing.xxl,
   },
   actions: {
     width: '100%',

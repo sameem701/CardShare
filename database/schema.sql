@@ -878,3 +878,96 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+
+/* ── UNREAD CHAT ON LIVE REQUESTS ─────────────────────────────
+   One row is one person on one chat. thread_id is the request id
+   while the order is Accepted or Proof sent. It becomes the
+   transaction id only when the messages are moved.
+   No row means he has not opened the chat, so every message from
+   the other person counts as unread. His own messages never count.
+   The Request-tab total is not stored here. */
+CREATE TABLE IF NOT EXISTS chat_reads (
+  user_id      VARCHAR(36) NOT NULL REFERENCES users(id),
+  thread_id    VARCHAR(36) NOT NULL,
+  last_read_at BIGINT NOT NULL,
+  PRIMARY KEY (user_id, thread_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_reads_thread ON chat_reads(thread_id);
+
+
+-- Per live request he is on. Pending is excluded because chat is closed.
+CREATE OR REPLACE FUNCTION get_request_unread_counts(
+  p_user_id VARCHAR(36)
+) RETURNS JSON AS $$
+BEGIN
+  RETURN (
+    SELECT COALESCE(json_agg(r), '[]'::json)
+    FROM (
+      SELECT
+        req.id AS request_id,
+        (
+          SELECT COUNT(*)::INT
+          FROM chat_messages cm
+          WHERE cm.thread_id = req.id
+          AND cm.sender_id <> p_user_id
+          AND cm.created_at > COALESCE(
+            (
+              SELECT cr.last_read_at
+              FROM chat_reads cr
+              WHERE cr.user_id = p_user_id
+              AND cr.thread_id = req.id
+            ),
+            0
+          )
+        ) AS unread_count
+      FROM requests req
+      WHERE (req.requester_id = p_user_id OR req.card_holder_id = p_user_id)
+      AND req.rq_status IN ('accepted', 'proof_submitted')
+    ) r
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Opening a chat sets his mark to the newest message. Creates the row
+-- if this is the first time. An older page must not move the mark back.
+CREATE OR REPLACE FUNCTION mark_chat_read(
+  p_thread_id VARCHAR(36),
+  p_user_id   VARCHAR(36)
+) RETURNS JSON AS $$
+DECLARE
+  v_latest BIGINT;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM requests
+    WHERE id = p_thread_id
+    AND (requester_id = p_user_id OR card_holder_id = p_user_id)
+  ) AND NOT EXISTS (
+    SELECT 1 FROM transactions
+    WHERE id = p_thread_id
+    AND (requester_id = p_user_id OR card_holder_id = p_user_id)
+  ) THEN
+    RAISE EXCEPTION 'Request not found or access denied.';
+  END IF;
+
+  SELECT MAX(created_at) INTO v_latest
+  FROM chat_messages
+  WHERE thread_id = p_thread_id;
+
+  IF v_latest IS NULL THEN
+    v_latest := (extract(epoch from now()) * 1000)::BIGINT;
+  END IF;
+
+  INSERT INTO chat_reads (user_id, thread_id, last_read_at)
+  VALUES (p_user_id, p_thread_id, v_latest)
+  ON CONFLICT (user_id, thread_id)
+  DO UPDATE SET last_read_at = GREATEST(chat_reads.last_read_at, EXCLUDED.last_read_at);
+
+  RETURN json_build_object(
+    'thread_id',    p_thread_id,
+    'last_read_at', v_latest
+  );
+END;
+$$ LANGUAGE plpgsql;
+

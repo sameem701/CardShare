@@ -6,7 +6,7 @@ import { useTopInset } from '../hooks/useTopInset';
 import { formatDisplayName } from '../utils/initials';
 import ConfirmDialog from './ConfirmDialog';
 
-export default function SideMenu({ visible, onClose, onHistory, onLoggedOut }) {
+export default function SideMenu({ visible, onClose, onHistory, onHowItWorks, onLoggedOut }) {
   const { user, signOut } = useSession();
   const topInset = useTopInset();
   const progress = useRef(new Animated.Value(0)).current;
@@ -65,6 +65,9 @@ export default function SideMenu({ visible, onClose, onHistory, onLoggedOut }) {
           <Text style={styles.name}>{formatDisplayName(user?.display_name) || 'Account'}</Text>
           <Pressable style={styles.row} onPress={onHistory} accessibilityRole="button" accessibilityLabel="History">
             <Text style={styles.rowText}>History</Text>
+          </Pressable>
+          <Pressable style={styles.row} onPress={onHowItWorks} accessibilityRole="button" accessibilityLabel="How it works">
+            <Text style={styles.rowText}>How it works</Text>
           </Pressable>
           <Pressable
             style={styles.row}

@@ -389,3 +389,113 @@ BEGIN
   );
 END;
 $$ LANGUAGE plpgsql;
+
+
+/* ── UNREAD CHAT ──────────────────────────────────────────────
+   Same functions as above. Last-read rows are deleted when a
+   pending request is declined, and retied to the cancelled
+   record when an accepted request is cancelled. */
+
+CREATE OR REPLACE FUNCTION decline_request(
+  p_request_id VARCHAR(36),
+  p_holder_id  VARCHAR(36)
+) RETURNS JSON AS $$
+DECLARE
+  v_request RECORD;
+BEGIN
+  SELECT * INTO v_request FROM requests
+  WHERE id = p_request_id
+  AND card_holder_id = p_holder_id
+  AND rq_status = 'pending'
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
+  END IF;
+
+  DELETE FROM chat_messages WHERE thread_id = p_request_id;
+  DELETE FROM chat_reads WHERE thread_id = p_request_id;
+  DELETE FROM requests WHERE id = p_request_id;
+
+  RETURN json_build_object(
+    'request_id',    p_request_id,
+    'merchant',      v_request.merchant,
+    'order_amount',  v_request.order_amount,
+    'result',        'declined'
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+
+CREATE OR REPLACE FUNCTION cancel_request_holder(
+  p_request_id VARCHAR(36),
+  p_holder_id  VARCHAR(36),
+  p_reason     TEXT
+) RETURNS JSON AS $$
+DECLARE
+  v_request RECORD;
+  v_card    RECORD;
+  v_txn_id  VARCHAR(36);
+  v_reason  TEXT;
+  v_now     BIGINT;
+BEGIN
+  v_reason := TRIM(p_reason);
+  IF v_reason IS NULL OR v_reason = '' THEN
+    RAISE EXCEPTION 'A reason is required to cancel.';
+  END IF;
+
+  SELECT * INTO v_request FROM requests
+  WHERE id = p_request_id
+  AND card_holder_id = p_holder_id
+  AND rq_status = 'accepted'
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
+  END IF;
+
+  SELECT * INTO v_card FROM cards WHERE id = v_request.card_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Card not found.';
+  END IF;
+
+  v_now    := extract(epoch from now()) * 1000;
+  v_txn_id := uuid_generate_v4()::varchar;
+
+  INSERT INTO transactions (
+    id, requester_id, requester_name, card_holder_id, card_holder_name, merchant,
+    delivery_address, order_amount,
+    card_id, bank_name, card_tier,
+    actual_amount_paid, screenshot_url,
+    txn_status, cancel_reason,
+    created_at, updated_at
+  ) VALUES (
+    v_txn_id,
+    v_request.requester_id,
+    (SELECT display_name FROM users WHERE id = v_request.requester_id),
+    v_request.card_holder_id,
+    (SELECT display_name FROM users WHERE id = v_request.card_holder_id),
+    v_request.merchant, v_request.delivery_address,
+    v_request.order_amount,
+    v_request.card_id, v_card.bank_name, v_card.card_tier,
+    NULL, NULL,
+    'cancelled_by_holder', v_reason,
+    v_now, v_now
+  );
+
+  UPDATE chat_messages
+  SET thread_id = v_txn_id
+  WHERE thread_id = p_request_id;
+
+  UPDATE chat_reads
+  SET thread_id = v_txn_id
+  WHERE thread_id = p_request_id;
+
+  DELETE FROM requests WHERE id = p_request_id;
+
+  RETURN json_build_object(
+    'txn_id',     v_txn_id,
+    'txn_status', 'cancelled_by_holder'
+  );
+END;
+$$ LANGUAGE plpgsql;
