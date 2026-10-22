@@ -11,8 +11,8 @@
 --   Bilal Hussain  03003333333
 --
 -- Circle has one row per pair, so three people only have three relationships.
--- Declined is not stored: that slot is Ahmed's pending invite to Bilal,
--- which is the invite Bilal can still accept or decline.
+-- Declined needs a pair of its own, and that slot is already Ahmed's pending
+-- invite to Bilal, which Bilal can accept or decline and Ahmed can cancel.
 --   Sara  → Ahmed   accepted
 --   Sara  → Bilal   accepted
 --   Ahmed → Bilal   pending
@@ -25,7 +25,9 @@
 --   Bilal → Sara    pending           Junaid Jamshed Sara can accept or decline. Address stays hidden. No chat.
 --
 -- History covers unpaid, paid, cancelled by the requester, and cancelled by the holder.
--- Each person is the requester on some rows and the card holder on others.
+-- Each person is the requester on some rows and the card holder on others,
+-- including every one of those four statuses in both roles.
+-- Batik is the holder-side cancel by the requester for Bilal.
 -- Paid rows exist in August, September, and October so all-time totals and this month differ.
 -- October paid rows are what the home totals use (updated_at in October 2026).
 -- One paid row keeps a card id for a card that is no longer in the cards table.
@@ -35,6 +37,12 @@
 -- Chat on a transaction is read-only.
 -- The Daraz thread has 33 messages so the chat screen can load an older page.
 -- Screenshot and chat image paths are placeholders and will not load.
+--
+-- Read marks are only on the two live chats. Pending has no chat, so its count is 0.
+-- No row means every message from the other person is unread. Own messages never count.
+--   Daraz   Sara 4 unread, Ahmed 2 unread
+--   Khaadi  Sara 0 unread, Ahmed 2 unread
+-- Sara's Request tab number is 4. Ahmed's is 4. Bilal's is 0.
 
 BEGIN;
 
@@ -72,6 +80,18 @@ WHERE user_id IN (SELECT id FROM seed_user_ids)
 
 DELETE FROM cards
 WHERE user_id IN (SELECT id FROM seed_user_ids);
+
+DELETE FROM chat_reads
+WHERE user_id IN (SELECT id FROM seed_user_ids)
+   OR thread_id IN (
+        SELECT id FROM requests
+        WHERE requester_id IN (SELECT id FROM seed_user_ids)
+           OR card_holder_id IN (SELECT id FROM seed_user_ids)
+        UNION
+        SELECT id FROM transactions
+        WHERE requester_id IN (SELECT id FROM seed_user_ids)
+           OR card_holder_id IN (SELECT id FROM seed_user_ids)
+      );
 
 DELETE FROM otps
 WHERE phone IN ('+923001111111', '+923002222222', '+923003333333');
@@ -450,6 +470,22 @@ INSERT INTO transactions (
     'paid', NULL,
     (extract(epoch FROM timestamptz '2026-09-12 13:00:00+05') * 1000)::bigint,
     (extract(epoch FROM timestamptz '2026-09-13 10:00:00+05') * 1000)::bigint
+  ),
+  (
+    'tttttttt-0018-4000-8000-000000000018',
+    'aaaaaaaa-0002-4000-8000-000000000002',
+    'Ahmed Ali',
+    'aaaaaaaa-0003-4000-8000-000000000003',
+    'Bilal Hussain',
+    'Batik',
+    'Flat 8, Askari 11, Lahore',
+    3400,
+    'cccccccc-0003-4000-8000-000000000001',
+    'Askari', 'Titanium',
+    NULL, NULL, NULL,
+    'cancelled_by_requester', 'Ordered the wrong colour.',
+    (extract(epoch FROM timestamptz '2026-10-09 14:00:00+05') * 1000)::bigint,
+    (extract(epoch FROM timestamptz '2026-10-09 16:00:00+05') * 1000)::bigint
   );
 
 -- Daraz proof thread: 33 messages, newest at the end. One of them is a photo.
@@ -555,6 +591,29 @@ INSERT INTO chat_messages (id, thread_id, sender_id, chat_message, attachment_pa
   ('mmmmmmmm-0018-4000-8000-000000000002', 'tttttttt-0016-4000-8000-000000000016', 'aaaaaaaa-0001-4000-8000-000000000001', 'Cancelled before checkout.', NULL, (extract(epoch FROM timestamptz '2026-10-01 15:55:00+05') * 1000)::bigint),
 
   ('mmmmmmmm-0019-4000-8000-000000000001', 'tttttttt-0017-4000-8000-000000000017', 'aaaaaaaa-0003-4000-8000-000000000003', 'Hyperstar was 2100.', NULL, (extract(epoch FROM timestamptz '2026-09-13 09:20:00+05') * 1000)::bigint),
-  ('mmmmmmmm-0019-4000-8000-000000000002', 'tttttttt-0017-4000-8000-000000000017', 'aaaaaaaa-0001-4000-8000-000000000001', 'Sent. Mark it paid when you see it.', NULL, (extract(epoch FROM timestamptz '2026-09-13 09:50:00+05') * 1000)::bigint);
+  ('mmmmmmmm-0019-4000-8000-000000000002', 'tttttttt-0017-4000-8000-000000000017', 'aaaaaaaa-0001-4000-8000-000000000001', 'Sent. Mark it paid when you see it.', NULL, (extract(epoch FROM timestamptz '2026-09-13 09:50:00+05') * 1000)::bigint),
+
+  ('mmmmmmmm-0020-4000-8000-000000000001', 'tttttttt-0018-4000-8000-000000000018', 'aaaaaaaa-0002-4000-8000-000000000002', 'Please cancel Batik. I ordered the wrong colour.', NULL, (extract(epoch FROM timestamptz '2026-10-09 16:05:00+05') * 1000)::bigint),
+  ('mmmmmmmm-0020-4000-8000-000000000002', 'tttttttt-0018-4000-8000-000000000018', 'aaaaaaaa-0003-4000-8000-000000000003', 'Cancelled. The card was not charged.', NULL, (extract(epoch FROM timestamptz '2026-10-09 16:20:00+05') * 1000)::bigint);
+
+-- Daraz: Sara has read through message 26, so Ahmed's 27, 29, 31, and 33 are still unread.
+-- Ahmed has read through message 29, so Sara's 30 and 32 are still unread.
+-- Khaadi: Sara has read the newest message. Ahmed has no row, so both of Sara's messages are unread.
+INSERT INTO chat_reads (user_id, thread_id, last_read_at) VALUES
+  (
+    'aaaaaaaa-0001-4000-8000-000000000001',
+    'rrrrrrrr-0001-4000-8000-000000000001',
+    (extract(epoch FROM timestamptz '2026-10-12 10:00:00+05') * 1000)::bigint + (26 * 60000)
+  ),
+  (
+    'aaaaaaaa-0002-4000-8000-000000000002',
+    'rrrrrrrr-0001-4000-8000-000000000001',
+    (extract(epoch FROM timestamptz '2026-10-12 10:00:00+05') * 1000)::bigint + (29 * 60000)
+  ),
+  (
+    'aaaaaaaa-0001-4000-8000-000000000001',
+    'rrrrrrrr-0002-4000-8000-000000000002',
+    (extract(epoch FROM timestamptz '2026-10-13 16:55:00+05') * 1000)::bigint
+  );
 
 COMMIT;

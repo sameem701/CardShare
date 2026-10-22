@@ -106,7 +106,11 @@ export default function CreateRequestScreen() {
     }
   };
 
-  const friendOptions = labelledOptions(friends, (friend) => friend.display_name || friend.phone || friend.id, (friend) => friend.phone);
+  const friendOptions = labelledOptions(
+    friends,
+    (friend) => friend.contact_name || friend.display_name || friend.phone || friend.id,
+    (friend) => friend.phone
+  );
   const cardOptions = labelledOptions(cards, (card) => `${card.bank_name} · ${card.card_tier}`, (card) => String(card.id).slice(0, 4));
 
   return (

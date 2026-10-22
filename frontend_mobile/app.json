@@ -31,7 +31,13 @@
           "photosPermission": "CardCircle needs photos for order proof and chat images."
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "CardCircle uses your contacts to show the name you saved for someone."
+        }
+      ]
     ]
   }
 }

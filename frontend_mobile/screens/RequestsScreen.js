@@ -62,7 +62,14 @@ export default function RequestsScreen() {
               accessibilityRole="button"
               accessibilityLabel={unread ? `${label}, unread messages` : label}
             >
-              <Text style={[styles.chipText, selected && styles.chipTextOn]}>{label}</Text>
+              <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
+                style={[styles.chipText, selected && styles.chipTextOn]}
+              >
+                {label}
+              </Text>
               {unread ? <View style={styles.dot} /> : null}
             </Pressable>
           );
@@ -98,20 +105,23 @@ export default function RequestsScreen() {
 const styles = StyleSheet.create({
   filters: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexWrap: 'nowrap',
     gap: theme.spacing.sm,
     paddingHorizontal: theme.layout.screenPadding,
     marginBottom: theme.spacing.lg,
   },
   chip: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: theme.spacing.sm,
+    justifyContent: 'center',
+    gap: theme.spacing.xs,
     backgroundColor: theme.colors.bg3,
     borderRadius: theme.radius.pill,
     borderWidth: 0.5,
     borderColor: theme.colors.border2,
-    paddingHorizontal: theme.spacing.md,
+    paddingHorizontal: theme.spacing.sm,
     paddingVertical: theme.spacing.sm,
   },
   chipOn: {
@@ -119,6 +129,7 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.green,
   },
   chipText: {
+    flexShrink: 1,
     fontFamily: theme.fonts.bodyMedium,
     fontSize: theme.fontSize.body,
     color: theme.colors.text2,

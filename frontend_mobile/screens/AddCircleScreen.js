@@ -7,11 +7,13 @@ import { findUserByPhone } from '../api/profile';
 import ErrorBanner from '../components/ErrorBanner';
 import PrimaryButton from '../components/PrimaryButton';
 import ScreenShell from '../components/ScreenShell';
+import SecondaryButton from '../components/SecondaryButton';
 import TopBar from '../components/TopBar';
 import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
 import { useToast } from '../context/ToastContext';
 import { queryClient } from '../queries/client';
+import { pickContact } from '../utils/deviceContacts';
 import { normalizePhone } from '../utils/phone';
 
 export default function AddCircleScreen() {
@@ -19,6 +21,7 @@ export default function AddCircleScreen() {
   const { sessionId, user } = useSession();
   const showToast = useToast();
   const [phone, setPhone] = useState('');
+  const [contactName, setContactName] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -29,7 +32,32 @@ export default function AddCircleScreen() {
     if (next.length > 20) next = next.slice(0, 20);
     if (hasInvalidCharacter) setError('Use numbers only.');
     else setError('');
+    setContactName(null);
     setPhone(next);
+  };
+
+  const chooseContact = async () => {
+    setError('');
+    try {
+      const picked = await pickContact();
+      if (!picked) return;
+      if (picked.unavailable) {
+        setError('Choosing a contact is available on your phone.');
+        return;
+      }
+      if (picked.denied) {
+        setError('Contacts access is off. You can still type the number.');
+        return;
+      }
+      if (picked.error) {
+        setError(picked.error);
+        return;
+      }
+      setPhone(picked.phone);
+      setContactName(picked.name);
+    } catch (err) {
+      setError(err.message);
+    }
   };
 
   const submit = async () => {
@@ -44,7 +72,7 @@ export default function AddCircleScreen() {
     setError('');
     try {
       const found = await findUserByPhone(sessionId, user.id, trimmed);
-      await sendCircleInvite(sessionId, user.id, found.id);
+      await sendCircleInvite(sessionId, user.id, found.id, contactName);
       showToast('Invite sent');
       await queryClient.invalidateQueries({ queryKey: ['circle', user.id] });
       navigation.goBack();
@@ -59,7 +87,11 @@ export default function AddCircleScreen() {
     <ScreenShell>
       <TopBar title="Add to circle" onBack={() => navigation.goBack()} />
       <View style={styles.scroll}>
-        <Text style={styles.subtitle}>Find them by the phone number they use on CardCircle.</Text>
+        <Text style={styles.subtitle}>Find them by the phone number they use on CardCircle. A contact name is shown only to you.</Text>
+        <View style={styles.choose}>
+          <SecondaryButton label="Choose from contacts" onPress={chooseContact} disabled={loading} />
+        </View>
+        {contactName ? <Text style={styles.picked}>Saved as {contactName}</Text> : null}
         <TextField
           value={phone}
           onChangeText={onChangePhone}
@@ -86,6 +118,16 @@ const styles = StyleSheet.create({
     color: theme.colors.text2,
     marginBottom: theme.spacing.lg,
     lineHeight: 22,
+  },
+  choose: {
+    marginBottom: theme.spacing.lg,
+  },
+  picked: {
+    fontFamily: theme.fonts.bodyMedium,
+    fontSize: theme.fontSize.body,
+    color: theme.colors.text,
+    marginTop: theme.spacing.md,
+    marginBottom: theme.spacing.sm,
   },
   input: {
     marginBottom: theme.spacing.lg,

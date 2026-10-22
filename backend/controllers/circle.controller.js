@@ -2,6 +2,25 @@ const db = require('../config/db');
 
 const ALLOWED_INVITE_RESPONSES = ['accepted', 'declined'];
 
+// Empty, or a value that is only a phone number, is not stored.
+// A name longer than the column is rejected before any circle call.
+function storedContactName(value) {
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+  if (trimmed.length > 100) {
+    throw new Error('Contact name must be 100 characters or fewer.');
+  }
+  const stripped = trimmed.replace(/[\s()+.-]/g, '');
+  if (/^[0-9]+$/.test(stripped)) return null;
+  return trimmed;
+}
+
+async function saveContactName(viewerId, personId, name) {
+  if (!name) return;
+  await db.query('CALL set_circle_contact_name($1, $2, $3)', [viewerId, personId, name]);
+}
+
 // POST /api/circle/invite
 // Send a circle invite (use profile find-by-phone first to get friend_id)
 const sendInvite = async (req, res) => {
@@ -17,7 +36,9 @@ const sendInvite = async (req, res) => {
   }
 
   try {
+    const contactName = storedContactName(req.body?.contact_name);
     await db.query('CALL add_to_circle($1, $2)', [user_id, friend_id]);
+    await saveContactName(user_id, friend_id, contactName);
     res.status(201).json({ message: 'Circle invite sent.' });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -42,11 +63,13 @@ const respondToInvite = async (req, res) => {
   }
 
   try {
+    const contactName = status === 'accepted' ? storedContactName(req.body?.contact_name) : null;
     await db.query('CALL respond_to_circle_invite($1, $2, $3)', [
       user_id,
       friend_id,
       status,
     ]);
+    await saveContactName(user_id, friend_id, contactName);
     res.json({ message: `Invite ${status}.` });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -54,7 +77,7 @@ const respondToInvite = async (req, res) => {
 };
 
 // GET /api/circle
-// List circle members and pending invites (includes is_sender flag)
+// List circle members and pending invites (includes is_sender and contact_name)
 const getCircle = async (req, res) => {
   const user_id = req.user.id;
 

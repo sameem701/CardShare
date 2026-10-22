@@ -60,13 +60,20 @@ CREATE TABLE IF NOT EXISTS cards (
 
 /* ── CIRCLE (trust network) ─────────────────────────────────── */
 CREATE TABLE IF NOT EXISTS circle (
-  user_id    VARCHAR(36) NOT NULL REFERENCES users(id),
-  friend_id  VARCHAR(36) NOT NULL REFERENCES users(id),
-  c_status   VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (c_status IN ('pending', 'accepted', 'declined')),
-  created_at BIGINT NOT NULL,
+  user_id              VARCHAR(36) NOT NULL REFERENCES users(id),
+  friend_id            VARCHAR(36) NOT NULL REFERENCES users(id),
+  c_status             VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (c_status IN ('pending', 'accepted', 'declined')),
+  created_at           BIGINT NOT NULL,
+  -- Name user_id uses for friend_id. Empty means use that person's account name.
+  sender_contact_name  VARCHAR(100),
+  -- Name friend_id uses for user_id. Empty until the invite is accepted.
+  friend_contact_name  VARCHAR(100),
   PRIMARY KEY (user_id, friend_id),
   CHECK (user_id <> friend_id)
 );
+
+ALTER TABLE circle ADD COLUMN IF NOT EXISTS sender_contact_name VARCHAR(100);
+ALTER TABLE circle ADD COLUMN IF NOT EXISTS friend_contact_name VARCHAR(100);
 
 /* ── REQUESTS ───────────────────────────────────────────────── */
 -- Live order. Deleted when it becomes a transaction.
@@ -756,8 +763,65 @@ END;
 $$ LANGUAGE plpgsql;
 
 
+-- Saves the name the logged-in person uses for the other person.
+-- The sender may set a name while the invite is pending.
+-- The receiver may set a name only after accepting.
+-- A blank value or a phone number clears the column.
+CREATE OR REPLACE PROCEDURE set_circle_contact_name(
+  p_viewer_id VARCHAR(36),
+  p_person_id VARCHAR(36),
+  p_name      VARCHAR(100)
+) AS $$
+DECLARE
+  v_user_id   VARCHAR(36);
+  v_friend_id VARCHAR(36);
+  v_status    VARCHAR(20);
+  v_name      VARCHAR(100);
+BEGIN
+  IF p_viewer_id = p_person_id THEN
+    RAISE EXCEPTION 'You cannot save a contact name for yourself.';
+  END IF;
+
+  SELECT user_id, friend_id, c_status
+  INTO v_user_id, v_friend_id, v_status
+  FROM circle
+  WHERE (user_id = p_viewer_id AND friend_id = p_person_id)
+  OR (user_id = p_person_id AND friend_id = p_viewer_id);
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'No circle row found.';
+  END IF;
+
+  v_name := NULLIF(TRIM(p_name), '');
+  IF v_name IS NOT NULL AND char_length(v_name) > 100 THEN
+    RAISE EXCEPTION 'Contact name must be 100 characters or fewer.';
+  END IF;
+  IF v_name IS NOT NULL AND regexp_replace(v_name, '[[:space:]()+.-]', '', 'g') ~ '^[0-9]+$' THEN
+    v_name := NULL;
+  END IF;
+
+  IF v_user_id = p_viewer_id AND v_friend_id = p_person_id THEN
+    UPDATE circle
+    SET sender_contact_name = v_name
+    WHERE user_id = v_user_id AND friend_id = v_friend_id;
+    RETURN;
+  END IF;
+
+  IF v_status <> 'accepted' THEN
+    RAISE EXCEPTION 'Accept the invite before saving a contact name.';
+  END IF;
+
+  UPDATE circle
+  SET friend_contact_name = v_name
+  WHERE user_id = v_user_id AND friend_id = v_friend_id;
+END;
+$$ LANGUAGE plpgsql;
+
+
 -- is_sender = true → logged-in user sent the invite (show Cancel button)
 -- is_sender = false → logged-in user received the invite (show Accept/Decline)
+-- contact_name is the logged-in person's own label for the other person.
+-- display_name stays the account name.
 CREATE OR REPLACE FUNCTION get_circle(
   p_user_id VARCHAR(36)
 ) RETURNS JSON AS $$
@@ -765,12 +829,14 @@ BEGIN
   RETURN (
     SELECT COALESCE(json_agg(c), '[]'::json)
     FROM (
-      SELECT u.id, u.display_name, u.phone, ci.c_status, TRUE AS is_sender
+      SELECT u.id, u.display_name, u.phone, ci.c_status, TRUE AS is_sender,
+             ci.sender_contact_name AS contact_name
       FROM circle ci
       JOIN users u ON u.id = ci.friend_id
       WHERE ci.user_id = p_user_id
       UNION
-      SELECT u.id, u.display_name, u.phone, ci.c_status, FALSE AS is_sender
+      SELECT u.id, u.display_name, u.phone, ci.c_status, FALSE AS is_sender,
+             ci.friend_contact_name AS contact_name
       FROM circle ci
       JOIN users u ON u.id = ci.user_id
       WHERE ci.friend_id = p_user_id

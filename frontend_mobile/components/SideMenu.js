@@ -1,10 +1,46 @@
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import Svg, { Circle, Path } from 'react-native-svg';
 import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
 import { useTopInset } from '../hooks/useTopInset';
 import { formatDisplayName } from '../utils/initials';
 import ConfirmDialog from './ConfirmDialog';
+
+function MenuIcon({ name, color, size = 18 }) {
+  if (name === 'profile') {
+    return (
+      <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+        <Circle cx="12" cy="8" r="3.2" stroke={color} strokeWidth="1.8" />
+        <Path d="M5.5 19.5c.6-3.2 3.2-5 6.5-5s5.9 1.8 6.5 5" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
+      </Svg>
+    );
+  }
+  if (name === 'history') {
+    return (
+      <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
+        <Circle cx="12" cy="12" r="8" stroke={color} strokeWidth="1.8" />
+        <Path d="M12 8v4l3 2" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      </Svg>
+    );
+  }
+  if (name === 'guide') {
+    return (
+      <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
+        <Circle cx="12" cy="12" r="8" stroke={color} strokeWidth="1.8" />
+        <Path d="M12 11v5" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
+        <Circle cx="12" cy="8" r="1" fill={color} />
+      </Svg>
+    );
+  }
+  return (
+    <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
+      <Path d="M10 7V6a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-8a1 1 0 0 1-1-1v-1" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <Path d="M4 12h11" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
+      <Path d="M12 8l4 4-4 4" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
 
 export default function SideMenu({ visible, onClose, onHistory, onHowItWorks, onLoggedOut }) {
   const { user, signOut } = useSession();
@@ -62,11 +98,16 @@ export default function SideMenu({ visible, onClose, onHistory, onHowItWorks, on
             { marginTop: topInset + 52, opacity, transform: [{ translateY }, { scale }] },
           ]}
         >
-          <Text style={styles.name}>{formatDisplayName(user?.display_name) || 'Account'}</Text>
+          <View style={styles.nameRow}>
+            <MenuIcon name="profile" color={theme.colors.text} size={22} />
+            <Text style={styles.name} numberOfLines={1}>{formatDisplayName(user?.display_name) || 'Account'}</Text>
+          </View>
           <Pressable style={styles.row} onPress={onHistory} accessibilityRole="button" accessibilityLabel="History">
+            <MenuIcon name="history" color={theme.colors.text2} />
             <Text style={styles.rowText}>History</Text>
           </Pressable>
           <Pressable style={styles.row} onPress={onHowItWorks} accessibilityRole="button" accessibilityLabel="How it works">
+            <MenuIcon name="guide" color={theme.colors.text2} />
             <Text style={styles.rowText}>How it works</Text>
           </Pressable>
           <Pressable
@@ -75,6 +116,7 @@ export default function SideMenu({ visible, onClose, onHistory, onHowItWorks, on
             accessibilityRole="button"
             accessibilityLabel="Log out"
           >
+            <MenuIcon name="logout" color={theme.colors.red} />
             <Text style={styles.logoutText}>Log out</Text>
           </Pressable>
           {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -108,6 +150,7 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: theme.layout.phoneWidth,
     alignItems: 'flex-end',
+    backgroundColor: theme.colors.overlay,
   },
   dismiss: {
     position: 'absolute',
@@ -117,7 +160,7 @@ const styles = StyleSheet.create({
     left: 0,
   },
   card: {
-    width: 220,
+    width: 236,
     marginRight: theme.layout.screenPadding,
     backgroundColor: theme.colors.bg2,
     borderRadius: theme.radius.card,
@@ -128,25 +171,36 @@ const styles = StyleSheet.create({
     paddingBottom: theme.spacing.sm,
     ...theme.shadows.card,
   },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
+  },
   name: {
+    flex: 1,
     fontFamily: theme.fonts.display,
     fontSize: theme.fontSize.title,
     color: theme.colors.text,
-    marginBottom: theme.spacing.md,
   },
   row: {
-    paddingVertical: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    paddingVertical: theme.spacing.md,
     borderTopWidth: 0.5,
     borderTopColor: theme.colors.border,
   },
   rowText: {
+    flex: 1,
     fontFamily: theme.fonts.bodyMedium,
-    fontSize: theme.fontSize.small,
+    fontSize: theme.fontSize.input,
     color: theme.colors.text2,
   },
   logoutText: {
+    flex: 1,
     fontFamily: theme.fonts.bodyMedium,
-    fontSize: theme.fontSize.small,
+    fontSize: theme.fontSize.input,
     color: theme.colors.red,
   },
   error: {

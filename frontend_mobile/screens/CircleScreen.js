@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { cancelCircleInvite, getCircle, respondToCircleInvite, removeFromCircle } from '../api/circle';
@@ -18,7 +18,18 @@ import { useAppActions } from '../navigation/AppActions';
 import { openScreen } from '../navigation/openScreen';
 import { queryClient } from '../queries/client';
 import { useScreenQuery } from '../queries/useScreenQuery';
+import { contactNamesByPhone } from '../utils/deviceContacts';
 import { asList } from '../utils/format';
+import { normalizePhone } from '../utils/phone';
+
+function shownName(member, localNames) {
+  if (member.contact_name) return member.contact_name;
+  if (member.c_status === 'pending' && !member.is_sender) {
+    const local = localNames[normalizePhone(member.phone)];
+    if (local) return local;
+  }
+  return member.display_name || 'Unknown';
+}
 
 function circleBadge(member) {
   if (member.c_status === 'accepted') return null;
@@ -34,6 +45,7 @@ export default function CircleScreen() {
   const [workingId, setWorkingId] = useState(null);
   const [confirm, setConfirm] = useState(null);
   const [actionError, setActionError] = useState('');
+  const [localNames, setLocalNames] = useState({});
 
   const circle = useScreenQuery(
     ['circle', user?.id],
@@ -52,11 +64,27 @@ export default function CircleScreen() {
   const members = circle.data || [];
   const error = actionError || (circle.data ? '' : circle.errorMessage) || (circle.isError ? circle.errorMessage : '');
 
-  const respond = async (friendId, status) => {
+  useEffect(() => {
+    const phones = (circle.data || [])
+      .filter((member) => member.c_status === 'pending' && !member.is_sender && !member.contact_name)
+      .map((member) => member.phone);
+    if (!phones.length) return undefined;
+    let cancelled = false;
+    contactNamesByPhone(phones)
+      .then((names) => {
+        if (!cancelled) setLocalNames(names);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [circle.data]);
+
+  const respond = async (friendId, status, contactName) => {
     setWorkingId(friendId);
     setActionError('');
     try {
-      await respondToCircleInvite(sessionId, user.id, friendId, status);
+      await respondToCircleInvite(sessionId, user.id, friendId, status, contactName);
       setConfirm(null);
       showToast(status === 'accepted' ? 'Invite accepted' : 'Invite declined');
       await queryClient.invalidateQueries({ queryKey: ['circle', user.id] });
@@ -122,10 +150,11 @@ export default function CircleScreen() {
           const badge = circleBadge(member);
           const pendingReceived = member.c_status === 'pending' && !member.is_sender;
           const pendingSent = member.c_status === 'pending' && member.is_sender;
+          const name = shownName(member, localNames);
           return (
             <View key={member.id} style={styles.member}>
               <ListCard
-                title={member.display_name || 'Unknown'}
+                title={name}
                 subtitle={member.phone || ''}
                 badgeLabel={badge?.label}
                 badgeVariant={badge?.variant}
@@ -136,7 +165,7 @@ export default function CircleScreen() {
                     onPress={() =>
                       setConfirm({
                         title: 'Remove from circle?',
-                        body: `${member.display_name || 'This person'} will no longer share cards with you.`,
+                        body: `${name} will no longer share cards with you.`,
                         confirmLabel: 'Remove',
                         onConfirm: () => remove(member.id),
                       })
@@ -153,7 +182,10 @@ export default function CircleScreen() {
                   <PrimaryButton
                     label="Accept"
                     loading={workingId === member.id}
-                    onPress={() => respond(member.id, 'accepted')}
+                    onPress={async () => {
+                      const names = await contactNamesByPhone([member.phone]);
+                      respond(member.id, 'accepted', names[normalizePhone(member.phone)] || null);
+                    }}
                   />
                   <SecondaryButton
                     label="Decline"
@@ -161,7 +193,7 @@ export default function CircleScreen() {
                     onPress={() =>
                       setConfirm({
                         title: 'Decline this invite?',
-                        body: `${member.display_name || 'This person'} will not join your circle.`,
+                        body: `${name} will not join your circle.`,
                         confirmLabel: 'Decline',
                         onConfirm: () => respond(member.id, 'declined'),
                       })
@@ -178,7 +210,7 @@ export default function CircleScreen() {
                     onPress={() =>
                       setConfirm({
                         title: 'Cancel this invite?',
-                        body: `${member.display_name || 'This person'} will not be asked to join your circle.`,
+                        body: `${name} will not be asked to join your circle.`,
                         confirmLabel: 'Cancel invite',
                         onConfirm: () => cancel(member.id),
                       })

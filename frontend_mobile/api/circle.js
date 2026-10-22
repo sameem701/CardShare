@@ -4,10 +4,10 @@ export function getCircle(sessionId, userId, options = {}) {
   return apiRequest('/api/circle', { sessionId, userId, signal: options.signal });
 }
 
-export function sendCircleInvite(sessionId, userId, friendId) {
+export function sendCircleInvite(sessionId, userId, friendId, contactName) {
   return apiRequest('/api/circle/invite', {
     method: 'POST',
-    body: { friend_id: friendId },
+    body: contactName ? { friend_id: friendId, contact_name: contactName } : { friend_id: friendId },
     sessionId,
     userId,
   });
@@ -21,10 +21,13 @@ export function cancelCircleInvite(sessionId, userId, friendId) {
   });
 }
 
-export function respondToCircleInvite(sessionId, userId, friendId, status) {
+export function respondToCircleInvite(sessionId, userId, friendId, status, contactName) {
+  const body = status === 'accepted' && contactName
+    ? { status, contact_name: contactName }
+    : { status };
   return apiRequest(`/api/circle/invite/${friendId}`, {
     method: 'PATCH',
-    body: { status },
+    body,
     sessionId,
     userId,
   });
