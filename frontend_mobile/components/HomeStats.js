@@ -70,23 +70,6 @@ export default function HomeStats({ stats }) {
           >
             <View style={[styles.page, { width }]}>
               <View style={styles.hero}>
-                <Text style={styles.kicker}>Total earned</Text>
-                <TotalMoney amount={stats.earnedAll} />
-                <Text style={styles.sub}>{lifetimeLine(stats.holderOrders)}</Text>
-              </View>
-              <View style={styles.row}>
-                <View style={styles.tile}>
-                  <MonthMoney amount={stats.earnedMonth} />
-                  <Text style={styles.caption}>Earned this month</Text>
-                </View>
-                <View style={styles.tile}>
-                  <Text style={styles.count}>{stats.holderOrdersMonth}</Text>
-                  <Text style={styles.caption}>Orders this month</Text>
-                </View>
-              </View>
-            </View>
-            <View style={[styles.page, { width }]}>
-              <View style={styles.hero}>
                 <Text style={styles.kicker}>Total saved</Text>
                 <TotalMoney amount={stats.savedAll} />
                 <Text style={styles.sub}>{lifetimeLine(stats.requesterOrders)}</Text>
@@ -102,6 +85,23 @@ export default function HomeStats({ stats }) {
                 </View>
               </View>
             </View>
+            <View style={[styles.page, { width }]}>
+              <View style={styles.hero}>
+                <Text style={styles.kicker}>Total earned</Text>
+                <TotalMoney amount={stats.earnedAll} />
+                <Text style={styles.sub}>{lifetimeLine(stats.holderOrders)}</Text>
+              </View>
+              <View style={styles.row}>
+                <View style={styles.tile}>
+                  <MonthMoney amount={stats.earnedMonth} />
+                  <Text style={styles.caption}>Earned this month</Text>
+                </View>
+                <View style={styles.tile}>
+                  <Text style={styles.count}>{stats.holderOrdersMonth}</Text>
+                  <Text style={styles.caption}>Orders this month</Text>
+                </View>
+              </View>
+            </View>
           </Animated.ScrollView>
         ) : null}
       </View>
@@ -110,7 +110,7 @@ export default function HomeStats({ stats }) {
           count={2}
           scrollX={scrollX}
           pageWidth={width}
-          labels={['Earned', 'Saved']}
+          labels={['Saved', 'Earned']}
           onSelect={showPage}
         />
       </View>

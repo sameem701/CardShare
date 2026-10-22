@@ -2,8 +2,10 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { deleteCard, getCards, toggleCardSharing } from '../api/cards';
+import { getCircle } from '../api/circle';
 import { getActiveOrders, getHolderHistory, getIncomingRequests } from '../api/holder';
 import { getActiveRequests, getRequesterHistory } from '../api/requester';
+import CircleStart from '../components/CircleStart';
 import ConfirmDialog from '../components/ConfirmDialog';
 import EmptyState from '../components/EmptyState';
 import HomeStats from '../components/HomeStats';
@@ -16,7 +18,7 @@ import CardCarousel from '../components/CardCarousel';
 import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
 import { useAppActions } from '../navigation/AppActions';
-import { openScreen } from '../navigation/openScreen';
+import { openCircle, openScreen } from '../navigation/openScreen';
 import { useScreenQuery } from '../queries/useScreenQuery';
 import { queryClient } from '../queries/client';
 import { dashboardStats } from '../utils/dashboard';
@@ -141,6 +143,14 @@ export default function HomeScreen() {
     }
   );
 
+  const circle = useScreenQuery(
+    ['circle', user?.id],
+    async ({ signal }) => asList(await getCircle(sessionId, user.id, { signal }))
+  );
+  const members = circle.data || [];
+  const inCircle = members.some((member) => member.c_status === 'accepted');
+  const showWelcome = Boolean(circle.data) && !inCircle;
+
   const cards = home.data?.cards || [];
   const recent = home.data?.recent || [];
   const stats = home.data?.stats || null;
@@ -150,6 +160,7 @@ export default function HomeScreen() {
 
   const onRefresh = () => {
     home.refetch();
+    circle.refetch();
   };
 
   const toggleSharing = async (card) => {
@@ -198,8 +209,50 @@ export default function HomeScreen() {
   };
 
   return (
-    <ScreenShell onRefresh={onRefresh} refreshing={home.refreshing}>
+    <ScreenShell onRefresh={onRefresh} refreshing={home.refreshing || circle.refreshing}>
       <TopBar title="Home" displayName={user.display_name} onAccount={openMenu} />
+      {circle.showLoading ? (
+        <LoadingState />
+      ) : showWelcome ? (
+        <>
+        <CircleStart
+          members={members}
+          onAdd={() => openScreen(navigation, 'add-circle')}
+          onOpenCircle={() => openCircle(navigation)}
+        />
+        <Text style={styles.section}>Your cards</Text>
+        {cardsError ? (
+          <View style={styles.pad}>
+            <ErrorBanner message={cardsError} onRetry={onRefresh} />
+          </View>
+        ) : null}
+        {home.showLoading ? (
+          <LoadingState />
+        ) : cards.length > 0 ? (
+          <CardCarousel
+            cards={cards}
+            displayName={user.display_name}
+            earnedByCard={stats?.earnedByCard || {}}
+            onToggleSharing={toggleSharing}
+            onRemove={setCardToRemove}
+          />
+        ) : null}
+        <Pressable
+          style={styles.ghost}
+          onPress={() => openScreen(navigation, 'add-card')}
+          accessibilityRole="button"
+          accessibilityLabel="Add a card"
+        >
+          <Text style={styles.ghostText}>+ Add a card</Text>
+        </Pressable>
+        </>
+      ) : (
+      <>
+      {circle.isError && !circle.data ? (
+        <View style={styles.pad}>
+          <ErrorBanner message={circle.errorMessage || 'Could not load your circle.'} onRetry={onRefresh} />
+        </View>
+      ) : null}
       <HomeStats stats={stats} />
       <View style={styles.pad}>
         <ErrorBanner message={statsError} onRetry={onRefresh} />
@@ -254,6 +307,8 @@ export default function HomeScreen() {
       <View style={styles.pad}>
         <ErrorBanner message={recentError} onRetry={onRefresh} />
       </View>
+      </>
+      )}
       <ConfirmDialog
         visible={Boolean(cardToRemove)}
         title="Remove this card?"

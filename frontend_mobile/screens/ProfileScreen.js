@@ -47,8 +47,7 @@ export default function ProfileScreen() {
       <ConfirmDialog
         visible={confirmLogout}
         title="Log out?"
-        body="You will need a new code to sign in again."
-        confirmLabel="Log out"
+        confirmLabel="Confirm"
         loading={working}
         onCancel={() => setConfirmLogout(false)}
         onConfirm={logout}

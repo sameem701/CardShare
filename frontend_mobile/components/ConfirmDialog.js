@@ -16,7 +16,7 @@ export default function ConfirmDialog({
 }) {
   return (
     <SheetOverlay visible={visible} onClose={loading ? undefined : onCancel}>
-      <Text style={styles.title}>{title}</Text>
+      <Text style={[styles.title, !body && styles.titleAlone]}>{title}</Text>
       {body ? <Text style={styles.body}>{body}</Text> : null}
       {danger ? (
         <SecondaryButton label={confirmLabel} danger disabled={loading} onPress={onConfirm} />
@@ -33,8 +33,12 @@ const styles = StyleSheet.create({
   title: {
     fontFamily: theme.fonts.display,
     fontSize: theme.fontSize.hero,
+    lineHeight: 36,
     color: theme.colors.text,
     marginBottom: theme.spacing.md,
+  },
+  titleAlone: {
+    marginBottom: theme.spacing.xxl,
   },
   body: {
     fontFamily: theme.fonts.body,

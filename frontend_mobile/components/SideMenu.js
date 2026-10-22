@@ -7,7 +7,7 @@ import { useTopInset } from '../hooks/useTopInset';
 import { formatDisplayName } from '../utils/initials';
 import ConfirmDialog from './ConfirmDialog';
 
-function MenuIcon({ name, color, size = 18 }) {
+function MenuIcon({ name, color, size = 22 }) {
   if (name === 'profile') {
     return (
       <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
@@ -18,7 +18,7 @@ function MenuIcon({ name, color, size = 18 }) {
   }
   if (name === 'history') {
     return (
-      <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
+      <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
         <Circle cx="12" cy="12" r="8" stroke={color} strokeWidth="1.8" />
         <Path d="M12 8v4l3 2" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
       </Svg>
@@ -26,7 +26,7 @@ function MenuIcon({ name, color, size = 18 }) {
   }
   if (name === 'guide') {
     return (
-      <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
+      <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
         <Circle cx="12" cy="12" r="8" stroke={color} strokeWidth="1.8" />
         <Path d="M12 11v5" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
         <Circle cx="12" cy="8" r="1" fill={color} />
@@ -34,10 +34,10 @@ function MenuIcon({ name, color, size = 18 }) {
     );
   }
   return (
-    <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
-      <Path d="M10 7V6a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-8a1 1 0 0 1-1-1v-1" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-      <Path d="M4 12h11" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
-      <Path d="M12 8l4 4-4 4" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <Path d="M16 17l5-5-5-5" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <Path d="M21 12H9" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
     </Svg>
   );
 }
@@ -103,11 +103,11 @@ export default function SideMenu({ visible, onClose, onHistory, onHowItWorks, on
             <Text style={styles.name} numberOfLines={1}>{formatDisplayName(user?.display_name) || 'Account'}</Text>
           </View>
           <Pressable style={styles.row} onPress={onHistory} accessibilityRole="button" accessibilityLabel="History">
-            <MenuIcon name="history" color={theme.colors.text2} />
+            <MenuIcon name="history" color={theme.colors.text2} size={22} />
             <Text style={styles.rowText}>History</Text>
           </Pressable>
           <Pressable style={styles.row} onPress={onHowItWorks} accessibilityRole="button" accessibilityLabel="How it works">
-            <MenuIcon name="guide" color={theme.colors.text2} />
+            <MenuIcon name="guide" color={theme.colors.text2} size={22} />
             <Text style={styles.rowText}>How it works</Text>
           </Pressable>
           <Pressable
@@ -116,7 +116,7 @@ export default function SideMenu({ visible, onClose, onHistory, onHowItWorks, on
             accessibilityRole="button"
             accessibilityLabel="Log out"
           >
-            <MenuIcon name="logout" color={theme.colors.red} />
+            <MenuIcon name="logout" color={theme.colors.red} size={22} />
             <Text style={styles.logoutText}>Log out</Text>
           </Pressable>
           {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -125,8 +125,7 @@ export default function SideMenu({ visible, onClose, onHistory, onHowItWorks, on
       <ConfirmDialog
         visible={confirmLogout}
         title="Log out?"
-        body="You will need a new code to sign in again."
-        confirmLabel="Log out"
+        confirmLabel="Confirm"
         loading={working}
         onCancel={() => setConfirmLogout(false)}
         onConfirm={logout}
@@ -187,7 +186,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
-    paddingVertical: theme.spacing.md,
+    paddingVertical: theme.spacing.lg,
     borderTopWidth: 0.5,
     borderTopColor: theme.colors.border,
   },
