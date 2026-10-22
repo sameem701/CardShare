@@ -17,7 +17,8 @@ export default function ListCard({ title, subtitle, badgeLabel, badgeVariant, ac
       {yourTurn ? <View style={styles.turnEdge} /> : null}
       <View style={styles.row}>
         <Text style={styles.title}>{title}</Text>
-        {action || (badgeLabel ? <Badge label={badgeLabel} variant={badgeVariant} /> : null)}
+        {badgeLabel ? <Badge label={badgeLabel} variant={badgeVariant} /> : null}
+        {action}
         {unread ? (
           <View style={styles.unread}>
             <Text style={styles.unreadText}>{unread}</Text>

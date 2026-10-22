@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
 import { useNavigation } from '@react-navigation/native';
 import { cancelCircleInvite, getCircle, respondToCircleInvite, removeFromCircle } from '../api/circle';
 import EmptyState from '../components/EmptyState';
@@ -29,6 +30,24 @@ function shownName(member, localNames) {
     if (local) return local;
   }
   return member.display_name || 'Unknown';
+}
+
+function CrossIcon() {
+  return (
+    <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
+      <Path d="M7 7l10 10M17 7L7 17" stroke={theme.colors.text2} strokeWidth="1.8" strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+function BinIcon() {
+  return (
+    <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
+      <Path d="M4 7h16" stroke={theme.colors.red} strokeWidth="2" strokeLinecap="round" />
+      <Path d="M9 7V5h6v2" stroke={theme.colors.red} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <Path d="M6.5 7l1 13h9l1-13" stroke={theme.colors.red} strokeWidth="2" strokeLinejoin="round" />
+    </Svg>
+  );
 }
 
 function circleBadge(member) {
@@ -160,7 +179,8 @@ export default function CircleScreen() {
                 badgeVariant={badge?.variant}
                 action={member.c_status === 'accepted' ? (
                   <Pressable
-                    style={styles.remove}
+                    style={styles.bin}
+                    hitSlop={8}
                     disabled={workingId === member.id}
                     onPress={() =>
                       setConfirm({
@@ -173,7 +193,24 @@ export default function CircleScreen() {
                     accessibilityRole="button"
                     accessibilityLabel="Remove"
                   >
-                    <Text style={styles.removeText}>Remove</Text>
+                    <BinIcon />
+                  </Pressable>
+                ) : pendingSent ? (
+                  <Pressable
+                    hitSlop={8}
+                    disabled={workingId === member.id}
+                    onPress={() =>
+                      setConfirm({
+                        title: 'Cancel this invite?',
+                        body: `${name} will not be asked to join your circle.`,
+                        confirmLabel: 'Cancel invite',
+                        onConfirm: () => cancel(member.id),
+                      })
+                    }
+                    accessibilityRole="button"
+                    accessibilityLabel="Cancel invite"
+                  >
+                    <CrossIcon />
                   </Pressable>
                 ) : null}
               />
@@ -196,23 +233,6 @@ export default function CircleScreen() {
                         body: `${name} will not join your circle.`,
                         confirmLabel: 'Decline',
                         onConfirm: () => respond(member.id, 'declined'),
-                      })
-                    }
-                  />
-                </View>
-              ) : null}
-              {pendingSent ? (
-                <View style={styles.actions}>
-                  <Text style={styles.hint}>Invite sent — waiting for them.</Text>
-                  <SecondaryButton
-                    label="Cancel"
-                    disabled={workingId === member.id}
-                    onPress={() =>
-                      setConfirm({
-                        title: 'Cancel this invite?',
-                        body: `${name} will not be asked to join your circle.`,
-                        confirmLabel: 'Cancel invite',
-                        onConfirm: () => cancel(member.id),
                       })
                     }
                   />
@@ -251,23 +271,12 @@ const styles = StyleSheet.create({
   actions: {
     gap: theme.spacing.sm,
   },
-  hint: {
-    fontFamily: theme.fonts.body,
-    fontSize: theme.fontSize.body,
-    color: theme.colors.text2,
-    paddingHorizontal: theme.spacing.xs,
-  },
-  remove: {
-    borderWidth: 0.5,
-    borderColor: theme.colors.red,
+  bin: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: theme.colors.redDim,
-    borderRadius: theme.radius.control,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
-  },
-  removeText: {
-    fontFamily: theme.fonts.bodyMedium,
-    fontSize: theme.fontSize.body,
-    color: theme.colors.red,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

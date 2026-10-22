@@ -19,7 +19,7 @@ function MonthMoney({ amount }) {
   return (
     <View>
       {label ? <Text style={styles.tileCurrency}>{label}</Text> : null}
-      <Text style={[styles.figure, styles.green]}>{value}</Text>
+      <Text style={[styles.figure, styles.green]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{value}</Text>
     </View>
   );
 }
@@ -30,7 +30,7 @@ function TotalMoney({ amount }) {
     return <Text style={styles.amount}>{value}</Text>;
   }
   return (
-    <Text style={styles.currency}>
+    <Text style={styles.currency} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
       PKR <Text style={styles.amount}>{value}</Text>
     </Text>
   );
@@ -80,7 +80,7 @@ export default function HomeStats({ stats }) {
                   <Text style={styles.caption}>Earned this month</Text>
                 </View>
                 <View style={styles.tile}>
-                  <Text style={[styles.figure, styles.count]}>{stats.holderOrdersMonth}</Text>
+                  <Text style={styles.count}>{stats.holderOrdersMonth}</Text>
                   <Text style={styles.caption}>Orders this month</Text>
                 </View>
               </View>
@@ -97,7 +97,7 @@ export default function HomeStats({ stats }) {
                   <Text style={styles.caption}>Saved this month</Text>
                 </View>
                 <View style={styles.tile}>
-                  <Text style={[styles.figure, styles.count]}>{stats.requesterOrdersMonth}</Text>
+                  <Text style={styles.count}>{stats.requesterOrdersMonth}</Text>
                   <Text style={styles.caption}>Orders this month</Text>
                 </View>
               </View>
@@ -143,14 +143,14 @@ const styles = StyleSheet.create({
   },
   currency: {
     fontFamily: theme.fonts.display,
-    fontSize: 30,
-    lineHeight: 44,
+    fontSize: 28,
+    lineHeight: 52,
     color: theme.colors.text,
   },
   amount: {
     fontFamily: theme.fonts.display,
-    fontSize: 42,
-    lineHeight: 46,
+    fontSize: 46,
+    lineHeight: 52,
     color: theme.colors.text,
   },
   sub: {
@@ -170,26 +170,30 @@ const styles = StyleSheet.create({
     borderWidth: 0.5,
     borderColor: theme.colors.border,
     padding: theme.spacing.md,
-    minHeight: 88,
+    minHeight: 96,
     justifyContent: 'space-between',
   },
   tileCurrency: {
     fontFamily: theme.fonts.display,
-    fontSize: 18,
+    fontSize: 16,
+    lineHeight: 20,
     color: theme.colors.green,
     marginBottom: 2,
   },
   figure: {
     fontFamily: theme.fonts.display,
-    fontSize: 18,
+    fontSize: 26,
+    lineHeight: 32,
     color: theme.colors.text,
   },
   green: {
     color: theme.colors.green,
   },
   count: {
-    fontSize: theme.fontSize.hero,
-    lineHeight: theme.lineHeight.hero,
+    fontFamily: theme.fonts.display,
+    fontSize: 36,
+    lineHeight: 42,
+    color: theme.colors.text,
   },
   caption: {
     fontFamily: theme.fonts.body,

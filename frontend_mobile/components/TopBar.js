@@ -34,7 +34,7 @@ export default function TopBar({ title, displayName, onBack, onAccount, actionLa
           <Pressable
             onPress={onAccount}
             disabled={!onAccount}
-            style={styles.avatar}
+            style={({ pressed }) => [styles.avatar, pressed && onAccount && styles.avatarPressed]}
             accessibilityRole={onAccount ? 'button' : 'text'}
             accessibilityLabel={onAccount ? 'Account' : initialsFor(displayName)}
           >
@@ -71,16 +71,21 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   avatar: {
-    width: 38,
-    height: 38,
-    borderRadius: theme.radius.avatar,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: theme.colors.greenDim,
+    borderWidth: 1,
+    borderColor: theme.colors.green,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  avatarPressed: {
+    backgroundColor: 'rgba(0, 200, 122, 0.28)',
+  },
   avatarText: {
     fontFamily: theme.fonts.bodyMedium,
-    fontSize: theme.fontSize.body,
+    fontSize: theme.fontSize.input,
     color: theme.colors.green,
   },
   backBtn: {
@@ -98,6 +103,6 @@ const styles = StyleSheet.create({
     color: theme.colors.black,
   },
   spacer: {
-    width: 38,
+    width: 44,
   },
 });
