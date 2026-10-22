@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { getCircle, respondToCircleInvite, removeFromCircle } from '../api/circle';
+import { cancelCircleInvite, getCircle, respondToCircleInvite, removeFromCircle } from '../api/circle';
 import EmptyState from '../components/EmptyState';
 import ErrorBanner from '../components/ErrorBanner';
 import ListCard from '../components/ListCard';
@@ -62,6 +62,23 @@ export default function CircleScreen() {
       await queryClient.invalidateQueries({ queryKey: ['circle', user.id] });
     } catch (err) {
       setActionError(err.message);
+    } finally {
+      setWorkingId(null);
+    }
+  };
+
+  const cancel = async (friendId) => {
+    setWorkingId(friendId);
+    setActionError('');
+    try {
+      await cancelCircleInvite(sessionId, user.id, friendId);
+      showToast('Invite cancelled');
+      setConfirm(null);
+      await queryClient.invalidateQueries({ queryKey: ['circle', user.id] });
+    } catch (err) {
+      setConfirm(null);
+      setActionError(err.message);
+      await queryClient.invalidateQueries({ queryKey: ['circle', user.id] });
     } finally {
       setWorkingId(null);
     }
@@ -153,7 +170,21 @@ export default function CircleScreen() {
                 </View>
               ) : null}
               {pendingSent ? (
-                <Text style={styles.hint}>Invite sent — waiting for them.</Text>
+                <View style={styles.actions}>
+                  <Text style={styles.hint}>Invite sent — waiting for them.</Text>
+                  <SecondaryButton
+                    label="Cancel"
+                    disabled={workingId === member.id}
+                    onPress={() =>
+                      setConfirm({
+                        title: 'Cancel this invite?',
+                        body: `${member.display_name || 'This person'} will not be asked to join your circle.`,
+                        confirmLabel: 'Cancel invite',
+                        onConfirm: () => cancel(member.id),
+                      })
+                    }
+                  />
+                </View>
               ) : null}
             </View>
           );

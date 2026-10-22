@@ -1,5 +1,7 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, G, Path, Rect, Text as SvgText } from 'react-native-svg';
+import PageDots from '../components/PageDots';
 import PrimaryButton from '../components/PrimaryButton';
 import SecondaryButton from '../components/SecondaryButton';
 import { useTopInset } from '../hooks/useTopInset';
@@ -114,9 +116,52 @@ function SlideArt({ index }) {
 
 export default function HowItWorksScreen({ step, onStep, onBack, onContinue, finishLabel = 'Continue' }) {
   const topInset = useTopInset();
+  const scroller = useRef(null);
+  const scrollX = useRef(new Animated.Value(0)).current;
+  const pageFromScroll = useRef(step);
+  const widthRef = useRef(0);
+  const lock = useRef(false);
+  const onStepRef = useRef(onStep);
+  onStepRef.current = onStep;
+  const [frame, setFrame] = useState({ width: 0, height: 0 });
   const index = step;
-  const slide = slides[index];
   const last = index === slides.length - 1;
+
+  useEffect(() => {
+    const width = frame.width;
+    if (!width) return;
+    const widthChanged = widthRef.current !== width;
+    const samePage = step === pageFromScroll.current && !widthChanged;
+    widthRef.current = width;
+    if (samePage) return;
+    const animate = !widthChanged && step !== pageFromScroll.current;
+    pageFromScroll.current = step;
+    lock.current = true;
+    scroller.current?.scrollTo({ x: step * width, animated: animate });
+    if (!animate) lock.current = false;
+  }, [step, frame.width]);
+
+  const onScroll = useRef(
+    Animated.event(
+      [{ nativeEvent: { contentOffset: { x: scrollX } } }],
+      {
+        useNativeDriver: true,
+        listener: (event) => {
+          const width = widthRef.current;
+          const x = event.nativeEvent.contentOffset.x;
+          if (!width) return;
+          if (lock.current) {
+            if (Math.abs(x - pageFromScroll.current * width) < 2) lock.current = false;
+            return;
+          }
+          const next = Math.max(0, Math.min(slides.length - 1, Math.round(x / width)));
+          if (next === pageFromScroll.current) return;
+          pageFromScroll.current = next;
+          onStepRef.current(next);
+        },
+      }
+    )
+  ).current;
 
   return (
     <View style={[styles.screen, { paddingTop: topInset }]}>
@@ -131,29 +176,65 @@ export default function HowItWorksScreen({ step, onStep, onBack, onContinue, fin
           <Text style={styles.skipText}>Skip</Text>
         </Pressable>
       </View>
-      <View style={styles.body}>
-        <View style={styles.art}>
-          <SlideArt index={index} />
-        </View>
-        <Text style={styles.kicker}>{`Step ${index + 1} of ${slides.length}`}</Text>
-        <Text style={styles.title}>{slide.title}</Text>
-        <Text style={styles.copy}>{slide.body}</Text>
-        <View style={styles.steps}>
-          {slide.steps.map((parts, stepIndex) => (
-            <View key={stepIndex} style={styles.step}>
-              <View style={styles.num}>
-                <Text style={styles.numText}>{stepIndex + 1}</Text>
+      <View
+        style={styles.pager}
+        onLayout={(event) => {
+          const { width, height } = event.nativeEvent.layout;
+          setFrame((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
+        }}
+      >
+        {frame.width > 0 ? (
+          <Animated.ScrollView
+            ref={scroller}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            decelerationRate="fast"
+            snapToInterval={frame.width}
+            snapToAlignment="start"
+            disableIntervalMomentum
+            scrollEventThrottle={16}
+            onScroll={onScroll}
+            onScrollBeginDrag={() => {
+              lock.current = false;
+            }}
+            onMomentumScrollEnd={() => {
+              lock.current = false;
+            }}
+            style={{ width: frame.width, height: frame.height }}
+          >
+            {slides.map((slide, slideIndex) => (
+              <View key={slide.title} style={[styles.page, { width: frame.width, height: frame.height }]}>
+                <View style={styles.art}>
+                  <SlideArt index={slideIndex} />
+                </View>
+                <Text style={styles.kicker}>{`Step ${slideIndex + 1} of ${slides.length}`}</Text>
+                <Text style={styles.title}>{slide.title}</Text>
+                <Text style={styles.copy}>{slide.body}</Text>
+                <View style={styles.steps}>
+                  {slide.steps.map((parts, stepIndex) => (
+                    <View key={stepIndex} style={styles.step}>
+                      <View style={styles.num}>
+                        <Text style={styles.numText}>{stepIndex + 1}</Text>
+                      </View>
+                      <RichLine parts={parts} style={styles.stepText} />
+                    </View>
+                  ))}
+                </View>
+                {slide.note ? <Text style={styles.note}>{slide.note}</Text> : null}
               </View>
-              <RichLine parts={parts} style={styles.stepText} />
-            </View>
-          ))}
-        </View>
-        {slide.note ? <Text style={styles.note}>{slide.note}</Text> : null}
+            ))}
+          </Animated.ScrollView>
+        ) : null}
       </View>
       <View style={styles.dots}>
-        {slides.map((item, dotIndex) => (
-          <View key={item.title} style={[styles.dot, dotIndex === index && styles.dotOn]} />
-        ))}
+        <PageDots
+          count={slides.length}
+          scrollX={scrollX}
+          pageWidth={frame.width}
+          labels={slides.map((item) => item.title)}
+          onSelect={onStep}
+        />
       </View>
       <View style={styles.actions}>
         <PrimaryButton
@@ -178,6 +259,7 @@ export default function HowItWorksScreen({ step, onStep, onBack, onContinue, fin
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
+    backgroundColor: theme.colors.bg,
     paddingHorizontal: theme.spacing.xxl,
     paddingBottom: theme.spacing.xxl,
   },
@@ -196,8 +278,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: theme.colors.text2,
   },
-  body: {
+  pager: {
     flex: 1,
+  },
+  page: {
     justifyContent: 'center',
   },
   art: {
@@ -274,20 +358,7 @@ const styles = StyleSheet.create({
     color: theme.colors.text2,
   },
   dots: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: theme.spacing.sm,
     marginBottom: 22,
-  },
-  dot: {
-    width: 7,
-    height: 7,
-    borderRadius: 7,
-    backgroundColor: 'rgba(255,255,255,0.16)',
-  },
-  dotOn: {
-    width: 18,
-    backgroundColor: theme.colors.green,
   },
   actions: {
     gap: 10,

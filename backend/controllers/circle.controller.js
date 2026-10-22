@@ -94,6 +94,28 @@ const getCircleCards = async (req, res) => {
   }
 };
 
+// DELETE /api/circle/invite/:friend_id
+// Sender withdraws an invite that is still pending
+const cancelInvite = async (req, res) => {
+  const user_id = req.user.id;
+  const friend_id = req.params.friend_id;
+
+  if (!friend_id || String(friend_id).trim() === '') {
+    return res.status(400).json({ error: 'friend_id is required.' });
+  }
+
+  if (friend_id === user_id) {
+    return res.status(400).json({ error: 'You cannot cancel an invite to yourself.' });
+  }
+
+  try {
+    await db.query('CALL cancel_circle_invite($1, $2)', [user_id, friend_id]);
+    res.json({ message: 'Invite cancelled.' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
 // DELETE /api/circle/:friend_id
 // Remove a friend from circle — blocked if an active order exists
 const removeFromCircle = async (req, res) => {
@@ -119,6 +141,7 @@ const removeFromCircle = async (req, res) => {
 module.exports = {
   sendInvite,
   respondToInvite,
+  cancelInvite,
   getCircle,
   getCircleCards,
   removeFromCircle,

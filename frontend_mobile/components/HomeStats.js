@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Animated, StyleSheet, Text, View } from 'react-native';
+import PageDots from './PageDots';
 import theme from '../constants/theme';
 import { formatPkr } from '../utils/format';
 
@@ -37,13 +38,12 @@ function TotalMoney({ amount }) {
 
 export default function HomeStats({ stats }) {
   const scroller = useRef(null);
-  const [page, setPage] = useState(0);
+  const scrollX = useRef(new Animated.Value(0)).current;
   const [width, setWidth] = useState(0);
 
   if (!stats) return null;
 
   const showPage = (index) => {
-    setPage(index);
     if (width > 0) scroller.current?.scrollTo({ x: index * width, animated: true });
   };
 
@@ -51,19 +51,22 @@ export default function HomeStats({ stats }) {
     <View style={styles.wrap}>
       <View onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
         {width > 0 ? (
-          <ScrollView
+          <Animated.ScrollView
             ref={scroller}
             horizontal
             pagingEnabled
+            nestedScrollEnabled
+            directionalLockEnabled
             showsHorizontalScrollIndicator={false}
             decelerationRate="fast"
             snapToInterval={width}
             snapToAlignment="start"
             disableIntervalMomentum
-            onMomentumScrollEnd={(event) => {
-              const next = Math.round(event.nativeEvent.contentOffset.x / width);
-              setPage(next === 1 ? 1 : 0);
-            }}
+            scrollEventThrottle={16}
+            onScroll={Animated.event(
+              [{ nativeEvent: { contentOffset: { x: scrollX } } }],
+              { useNativeDriver: true }
+            )}
           >
             <View style={[styles.page, { width }]}>
               <View style={styles.hero}>
@@ -99,21 +102,16 @@ export default function HomeStats({ stats }) {
                 </View>
               </View>
             </View>
-          </ScrollView>
+          </Animated.ScrollView>
         ) : null}
       </View>
       <View style={styles.dots}>
-        <Pressable
-          onPress={() => showPage(0)}
-          style={[styles.dot, page === 0 && styles.dotOn]}
-          accessibilityRole="button"
-          accessibilityLabel="Earned"
-        />
-        <Pressable
-          onPress={() => showPage(1)}
-          style={[styles.dot, page === 1 && styles.dotOn]}
-          accessibilityRole="button"
-          accessibilityLabel="Saved"
+        <PageDots
+          count={2}
+          scrollX={scrollX}
+          pageWidth={width}
+          labels={['Earned', 'Saved']}
+          onSelect={showPage}
         />
       </View>
     </View>
@@ -200,19 +198,6 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing.sm,
   },
   dots: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: theme.spacing.sm,
     marginTop: theme.spacing.sm,
-  },
-  dot: {
-    width: 7,
-    height: 7,
-    borderRadius: 7,
-    backgroundColor: 'rgba(255,255,255,0.16)',
-  },
-  dotOn: {
-    width: 18,
-    backgroundColor: theme.colors.green,
   },
 });

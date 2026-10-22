@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import theme from '../constants/theme';
 import { formatPkr, sharingOn } from '../utils/format';
 import VirtualCard from './VirtualCard';
@@ -39,64 +39,128 @@ function SharingSwitch({ on }) {
   );
 }
 
+function CardPage({ card, displayName, earnedByCard, onToggleSharing, onRemove }) {
+  const sharing = sharingOn(card.allow_sharing);
+  return (
+    <View style={styles.cardShell}>
+      <VirtualCard
+        bankName={card.bank_name}
+        cardTier={card.card_tier}
+        displayName={displayName}
+        earnedText={`${formatPkr(earnedByCard[card.id] || 0)} earned`}
+      />
+      <View style={styles.foot}>
+        <View style={styles.shareBlock}>
+          <Pressable
+            style={styles.shareRow}
+            onPress={() => onToggleSharing?.(card)}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: sharing }}
+            accessibilityLabel={sharing ? 'Sharing on' : 'Sharing off'}
+          >
+            <Text style={styles.footText}>Sharing</Text>
+            <SharingSwitch on={sharing} />
+          </Pressable>
+          <Text style={styles.shareHint}>
+            {sharing
+              ? 'Your circle can see this card and ask you to order on it.'
+              : 'Your circle cannot see this card.'}
+          </Text>
+        </View>
+        <Pressable
+          style={styles.removeButton}
+          onPress={() => onRemove?.(card)}
+          accessibilityRole="button"
+          accessibilityLabel="Remove card"
+        >
+          <Text style={styles.removeText}>Remove</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
 export default function CardCarousel({ cards, displayName, earnedByCard = {}, onToggleSharing, onRemove }) {
+  const scroller = useRef(null);
+  const indexRef = useRef(0);
+  const widthRef = useRef(0);
   const [index, setIndex] = useState(0);
+  const [width, setWidth] = useState(0);
   const count = cards.length;
   const hasMultiple = count > 1;
-  const current = cards[index];
 
   useEffect(() => {
-    setIndex((prev) => Math.min(prev, Math.max(0, count - 1)));
-  }, [count]);
+    if (width <= 0) return;
+    const max = Math.max(0, count - 1);
+    const page = Math.min(indexRef.current, max);
+    const widthChanged = widthRef.current !== width;
+    widthRef.current = width;
+    if (!widthChanged && page === indexRef.current) return;
+    indexRef.current = page;
+    setIndex(page);
+    scroller.current?.scrollTo({ x: page * width, animated: false });
+  }, [count, width]);
 
-  const goPrev = () => setIndex((prev) => (prev <= 0 ? count - 1 : prev - 1));
-  const goNext = () => setIndex((prev) => (prev >= count - 1 ? 0 : prev + 1));
+  const remember = (x) => {
+    if (width <= 0) return;
+    const next = Math.max(0, Math.min(count - 1, Math.round(x / width)));
+    indexRef.current = next;
+    setIndex((prev) => (prev === next ? prev : next));
+  };
 
-  if (!current) return null;
+  const go = (delta) => {
+    if (width <= 0) return;
+    const next = Math.max(0, Math.min(count - 1, indexRef.current + delta));
+    scroller.current?.scrollTo({ x: next * width, animated: true });
+  };
+
+  if (count === 0) return null;
 
   return (
     <View style={styles.wrap}>
-      <View style={styles.cardShell}>
-        <VirtualCard
-          bankName={current.bank_name}
-          cardTier={current.card_tier}
-          displayName={displayName}
-          earnedText={`${formatPkr(earnedByCard[current.id] || 0)} earned`}
-        />
-        <View style={styles.foot}>
-          <View style={styles.shareBlock}>
-            <Pressable
-              style={styles.shareRow}
-              onPress={() => onToggleSharing?.(current)}
-              accessibilityRole="switch"
-              accessibilityState={{ checked: sharingOn(current.allow_sharing) }}
-              accessibilityLabel={sharingOn(current.allow_sharing) ? 'Sharing on' : 'Sharing off'}
-            >
-              <Text style={styles.footText}>Sharing</Text>
-              <SharingSwitch on={sharingOn(current.allow_sharing)} />
-            </Pressable>
-            <Text style={styles.shareHint}>
-              {sharingOn(current.allow_sharing)
-                ? 'Your circle can see this card and ask you to order on it.'
-                : 'Your circle cannot see this card.'}
-            </Text>
-          </View>
-          <Pressable
-            style={styles.removeButton}
-            onPress={() => onRemove?.(current)}
-            accessibilityRole="button"
-            accessibilityLabel="Remove card"
+      <View onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
+        {width > 0 ? (
+          <ScrollView
+            ref={scroller}
+            horizontal
+            pagingEnabled
+            nestedScrollEnabled
+            showsHorizontalScrollIndicator={false}
+            decelerationRate="fast"
+            snapToInterval={width}
+            snapToAlignment="start"
+            disableIntervalMomentum
+            scrollEventThrottle={16}
+            scrollEnabled={hasMultiple}
+            directionalLockEnabled
+            onScroll={(event) => remember(event.nativeEvent.contentOffset.x)}
+            style={{ width }}
           >
-            <Text style={styles.removeText}>Remove</Text>
-          </Pressable>
-        </View>
+            {cards.map((card) => (
+              <View key={card.id} style={{ width }}>
+                <CardPage
+                  card={card}
+                  displayName={displayName}
+                  earnedByCard={earnedByCard}
+                  onToggleSharing={onToggleSharing}
+                  onRemove={onRemove}
+                />
+              </View>
+            ))}
+          </ScrollView>
+        ) : null}
       </View>
 
       {hasMultiple ? (
         <View style={styles.controls}>
           <Pressable
-            style={({ pressed }) => [styles.arrow, pressed && styles.arrowPressed]}
-            onPress={goPrev}
+            style={({ pressed }) => [
+              styles.arrow,
+              pressed && index > 0 && styles.arrowPressed,
+              index === 0 && styles.arrowDisabled,
+            ]}
+            onPress={() => go(-1)}
+            disabled={index === 0}
             accessibilityLabel="Previous card"
           >
             <Text style={styles.arrowText}>‹</Text>
@@ -105,8 +169,13 @@ export default function CardCarousel({ cards, displayName, earnedByCard = {}, on
             {index + 1} / {count}
           </Text>
           <Pressable
-            style={({ pressed }) => [styles.arrow, pressed && styles.arrowPressed]}
-            onPress={goNext}
+            style={({ pressed }) => [
+              styles.arrow,
+              pressed && index < count - 1 && styles.arrowPressed,
+              index >= count - 1 && styles.arrowDisabled,
+            ]}
+            onPress={() => go(1)}
+            disabled={index >= count - 1}
             accessibilityLabel="Next card"
           >
             <Text style={styles.arrowText}>›</Text>
@@ -207,6 +276,9 @@ const styles = StyleSheet.create({
   },
   arrowPressed: {
     backgroundColor: theme.colors.bg4,
+  },
+  arrowDisabled: {
+    opacity: 0.35,
   },
   arrowText: {
     fontFamily: theme.fonts.display,

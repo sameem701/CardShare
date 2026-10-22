@@ -641,6 +641,7 @@ $$ LANGUAGE plpgsql;
 /* ─────────────────────────────────────────────────────────────
    CIRCLE
    Flow: find_user_by_phone → add_to_circle → respond_to_circle_invite
+         or cancel_circle_invite
          → get_circle / get_circle_cards (used before creating a request)
    ───────────────────────────────────────────────────────────── */
 
@@ -720,6 +721,37 @@ BEGIN
   DELETE FROM circle
   WHERE (user_id = p_user_id AND friend_id = p_friend_id)
   OR (user_id = p_friend_id AND friend_id = p_user_id);
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Sender withdraws an invite that is still pending.
+-- Accepted rows stay. A decline or a missing row is no longer pending.
+CREATE OR REPLACE PROCEDURE cancel_circle_invite(
+  p_user_id   VARCHAR(36),
+  p_friend_id VARCHAR(36)
+) AS $$
+DECLARE
+  v_status VARCHAR(20);
+BEGIN
+  DELETE FROM circle
+  WHERE user_id = p_user_id
+  AND friend_id = p_friend_id
+  AND c_status = 'pending';
+
+  IF FOUND THEN
+    RETURN;
+  END IF;
+
+  SELECT c_status INTO v_status
+  FROM circle
+  WHERE user_id = p_user_id AND friend_id = p_friend_id;
+
+  IF v_status = 'accepted' THEN
+    RAISE EXCEPTION 'They already accepted.';
+  END IF;
+
+  RAISE EXCEPTION 'No pending invite found.';
 END;
 $$ LANGUAGE plpgsql;
 

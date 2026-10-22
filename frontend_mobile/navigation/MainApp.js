@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { BackHandler, Platform, View } from 'react-native';
-import { NavigationContainer, useNavigation, useNavigationContainerRef } from '@react-navigation/native';
+import { DefaultTheme, NavigationContainer, useNavigation, useNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import BottomNav from '../components/BottomNav';
@@ -20,8 +20,18 @@ import ProfileScreen from '../screens/ProfileScreen';
 import RequestDetailRequesterScreen from '../screens/RequestDetailRequesterScreen';
 import RequestsScreen from '../screens/RequestsScreen';
 import TransactionDetailScreen from '../screens/TransactionDetailScreen';
+import theme from '../constants/theme';
 import { AppActionsProvider } from './AppActions';
 import { screenId } from './openScreen';
+
+const navigationTheme = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+    background: theme.colors.bg,
+    card: theme.colors.bg,
+  },
+};
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -29,6 +39,7 @@ const Tab = createBottomTabNavigator();
 const stackOptions = {
   headerShown: false,
   freezeOnBlur: true,
+  contentStyle: { backgroundColor: theme.colors.bg },
 };
 
 function MainTabs() {
@@ -96,7 +107,7 @@ function MainAppShell({ onLoggedOut }) {
   return (
     <AppActionsProvider value={{ openMenu: () => setMenuOpen(true), onLoggedOut }}>
       <View style={{ flex: 1 }}>
-        <NavigationContainer ref={navigationRef} onReady={syncTabs} onStateChange={syncTabs}>
+        <NavigationContainer ref={navigationRef} theme={navigationTheme} onReady={syncTabs} onStateChange={syncTabs}>
           <Stack.Navigator screenOptions={stackOptions}>
             <Stack.Screen name="Tabs" component={MainTabs} />
             <Stack.Screen name="add-card" component={AddCardScreen} getId={screenId} />

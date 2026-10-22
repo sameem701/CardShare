@@ -7,6 +7,7 @@ router.use(auth);
 
 router.post('/invite', controller.sendInvite);
 router.patch('/invite/:friend_id', controller.respondToInvite);
+router.delete('/invite/:friend_id', controller.cancelInvite);
 router.get('/', controller.getCircle);
 router.get('/:friend_id/cards', controller.getCircleCards);
 router.delete('/:friend_id', controller.removeFromCircle);

@@ -13,6 +13,14 @@ export function sendCircleInvite(sessionId, userId, friendId) {
   });
 }
 
+export function cancelCircleInvite(sessionId, userId, friendId) {
+  return apiRequest(`/api/circle/invite/${friendId}`, {
+    method: 'DELETE',
+    sessionId,
+    userId,
+  });
+}
+
 export function respondToCircleInvite(sessionId, userId, friendId, status) {
   return apiRequest(`/api/circle/invite/${friendId}`, {
     method: 'PATCH',
