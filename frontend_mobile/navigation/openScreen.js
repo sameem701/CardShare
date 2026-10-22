@@ -39,7 +39,7 @@ export function openScreen(navigation, name, params, options = {}) {
   stack.navigate(name, params);
 }
 
-export function openCircle(navigation) {
+export function openRequests(navigation) {
   const stack = findStack(navigation);
   const routes = stack.getState()?.routes ?? [];
   const index = routes.findIndex((route) => route.name === 'Tabs');
@@ -47,5 +47,19 @@ export function openCircle(navigation) {
     const distance = routes.length - 1 - index;
     if (distance > 0) stack.pop(distance);
   }
-  stack.navigate('Tabs', { screen: 'Circle' });
+  stack.navigate('Tabs', { screen: 'Request' });
+}
+
+export function openCircle(navigation, options = {}) {
+  const stack = findStack(navigation);
+  const routes = stack.getState()?.routes ?? [];
+  const index = routes.findIndex((route) => route.name === 'Tabs');
+  if (index >= 0) {
+    const distance = routes.length - 1 - index;
+    if (distance > 0) stack.pop(distance);
+  }
+  stack.navigate('Tabs', {
+    screen: 'Circle',
+    params: { filter: options.pending ? 'pending' : 'circle', at: Date.now() },
+  });
 }

@@ -77,8 +77,12 @@ ALTER TABLE circle ADD COLUMN IF NOT EXISTS friend_contact_name VARCHAR(100);
 
 /* ── REQUESTS ───────────────────────────────────────────────── */
 -- Live order. Deleted when it becomes a transaction.
--- A pending cancel or a decline deletes the row. An accepted cancel, or Sara
+-- A pending cancel or a decline deletes that one row. An accepted cancel, or Sara
 -- accepting the proof, writes a transaction and moves the chat onto it first.
+-- order_group_id is the same on every row from one Start order. Each person still
+-- has their own id. The first accept keeps that row and deletes the other pending
+-- rows in the group. Those rows are not restored if the winner later cancels.
+-- The table only holds live orders, so one row per requester and card holder.
 -- rq_status:
 --   pending          — Sara created the request. No chat. Address hidden from Ahmed.
 --   accepted         — Ahmed accepted. Address is visible, chat is open, he can shop.
@@ -88,6 +92,7 @@ ALTER TABLE circle ADD COLUMN IF NOT EXISTS friend_contact_name VARCHAR(100);
 -- The card charge is actual_amount_paid. His share is not stored on the request.
 CREATE TABLE IF NOT EXISTS requests (
   id                 VARCHAR(36) PRIMARY KEY,
+  order_group_id     VARCHAR(36) NOT NULL,
   requester_id       VARCHAR(36) NOT NULL REFERENCES users(id),
   card_holder_id     VARCHAR(36) NOT NULL REFERENCES users(id),
   card_id            VARCHAR(36) NOT NULL REFERENCES cards(id),
@@ -103,6 +108,29 @@ CREATE TABLE IF NOT EXISTS requests (
   created_at         BIGINT NOT NULL,
   updated_at         BIGINT NOT NULL
 );
+
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS order_group_id VARCHAR(36);
+UPDATE requests SET order_group_id = id WHERE order_group_id IS NULL;
+ALTER TABLE requests ALTER COLUMN order_group_id SET NOT NULL;
+
+-- A row inserted without a group id is a group of one. The current single-person
+-- create still works until it is replaced. A Start order that passes a group id
+-- keeps that value.
+CREATE OR REPLACE FUNCTION requests_set_order_group()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.order_group_id IS NULL THEN
+    NEW.order_group_id := NEW.id;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS requests_order_group ON requests;
+CREATE TRIGGER requests_order_group
+  BEFORE INSERT ON requests
+  FOR EACH ROW
+  EXECUTE FUNCTION requests_set_order_group();
 
 /* ── TRANSACTIONS ───────────────────────────────────────────── */
 -- Written when Sara accepts proof, or when either person cancels an accepted request.
@@ -201,7 +229,9 @@ CREATE INDEX IF NOT EXISTS idx_circle_user         ON circle(user_id);
 CREATE INDEX IF NOT EXISTS idx_circle_friend       ON circle(friend_id);
 CREATE INDEX IF NOT EXISTS idx_requests_requester  ON requests(requester_id);
 CREATE INDEX IF NOT EXISTS idx_requests_holder     ON requests(card_holder_id);
-CREATE INDEX IF NOT EXISTS idx_requests_requester_holder ON requests(requester_id, card_holder_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_requests_one_live_pair ON requests(requester_id, card_holder_id);
+DROP INDEX IF EXISTS idx_requests_requester_holder;
+CREATE INDEX IF NOT EXISTS idx_requests_order_group ON requests(order_group_id);
 CREATE INDEX IF NOT EXISTS idx_requests_status     ON requests(rq_status);
 CREATE INDEX IF NOT EXISTS idx_txn_requester       ON transactions(requester_id);
 CREATE INDEX IF NOT EXISTS idx_txn_holder          ON transactions(card_holder_id);
@@ -870,6 +900,51 @@ BEGIN
       WHERE cards.user_id = p_friend_id
       AND cards.allow_sharing = 1
     ) c
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Accepted circle members who are sharing this bank and tier.
+-- Two cards of the same bank and tier use the newer card.
+-- has_live_order is true when the viewer already has a live request with that person.
+-- contact_name is the viewer's own label. display_name stays the account name.
+CREATE OR REPLACE FUNCTION get_holders_for_card(
+  p_user_id   VARCHAR(36),
+  p_bank_name VARCHAR(100),
+  p_card_tier VARCHAR(50)
+) RETURNS JSON AS $$
+BEGIN
+  RETURN (
+    SELECT COALESCE(json_agg(h ORDER BY h.display_name, h.id), '[]'::json)
+    FROM (
+      SELECT DISTINCT ON (u.id)
+        u.id,
+        u.display_name,
+        u.phone,
+        f.contact_name,
+        c.id AS card_id,
+        EXISTS (
+          SELECT 1 FROM requests r
+          WHERE r.requester_id = p_user_id
+          AND r.card_holder_id = u.id
+        ) AS has_live_order
+      FROM (
+        SELECT friend_id AS person_id, sender_contact_name AS contact_name
+        FROM circle
+        WHERE user_id = p_user_id AND c_status = 'accepted'
+        UNION ALL
+        SELECT user_id AS person_id, friend_contact_name AS contact_name
+        FROM circle
+        WHERE friend_id = p_user_id AND c_status = 'accepted'
+      ) f
+      JOIN users u ON u.id = f.person_id
+      JOIN cards c ON c.user_id = u.id
+        AND c.allow_sharing = 1
+        AND c.bank_name = p_bank_name
+        AND c.card_tier = p_card_tier
+      ORDER BY u.id, c.created_at DESC
+    ) h
   );
 END;
 $$ LANGUAGE plpgsql;

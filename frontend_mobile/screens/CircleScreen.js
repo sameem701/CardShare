@@ -1,15 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { cancelCircleInvite, getCircle, respondToCircleInvite, removeFromCircle } from '../api/circle';
 import EmptyState from '../components/EmptyState';
 import ErrorBanner from '../components/ErrorBanner';
 import ListCard from '../components/ListCard';
 import LoadingState from '../components/LoadingState';
-import PrimaryButton from '../components/PrimaryButton';
 import ScreenShell from '../components/ScreenShell';
-import SecondaryButton from '../components/SecondaryButton';
 import TopBar from '../components/TopBar';
 import ConfirmDialog from '../components/ConfirmDialog';
 import theme from '../constants/theme';
@@ -50,14 +48,22 @@ function BinIcon() {
   );
 }
 
+function TickIcon() {
+  return (
+    <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
+      <Path d="M5 12.5l4.5 4.5L19 7.5" stroke={theme.colors.green} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
 function circleBadge(member) {
-  if (member.c_status === 'accepted') return null;
-  if (member.c_status === 'declined') return { label: 'Declined', variant: 'gray' };
-  return { label: 'Pending', variant: 'amber' };
+  if (member.c_status === 'pending' && member.is_sender) return { label: 'Sent', variant: 'amber' };
+  return null;
 }
 
 export default function CircleScreen() {
   const navigation = useNavigation();
+  const route = useRoute();
   const { openMenu } = useAppActions();
   const { sessionId, user } = useSession();
   const showToast = useToast();
@@ -65,6 +71,13 @@ export default function CircleScreen() {
   const [confirm, setConfirm] = useState(null);
   const [actionError, setActionError] = useState('');
   const [localNames, setLocalNames] = useState({});
+  const [filter, setFilter] = useState('circle');
+
+  useEffect(() => {
+    if (route.params?.filter === 'pending' || route.params?.filter === 'circle') {
+      setFilter(route.params.filter);
+    }
+  }, [route.params?.filter, route.params?.at]);
 
   const circle = useScreenQuery(
     ['circle', user?.id],
@@ -81,6 +94,10 @@ export default function CircleScreen() {
     }
   );
   const members = circle.data || [];
+  const incoming = members.some((member) => member.c_status === 'pending' && !member.is_sender);
+  const visible = members.filter((member) => (
+    filter === 'pending' ? member.c_status === 'pending' : member.c_status === 'accepted'
+  ));
   const error = actionError || (circle.data ? '' : circle.errorMessage) || (circle.isError ? circle.errorMessage : '');
 
   useEffect(() => {
@@ -158,20 +175,45 @@ export default function CircleScreen() {
         actionLabel="+ Add"
         onAction={() => openScreen(navigation, 'add-circle')}
       />
+      <View style={styles.filters}>
+        {[['circle', 'Circle'], ['pending', 'Pending']].map(([id, label]) => {
+          const selected = filter === id;
+          const mark = id === 'pending' && incoming;
+          return (
+            <Pressable
+              key={id}
+              onPress={() => setFilter(id)}
+              style={[styles.chip, selected && styles.chipOn]}
+              accessibilityRole="button"
+              accessibilityLabel={mark ? `${label}, invite waiting` : label}
+            >
+              <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
+                style={[styles.chipText, selected && styles.chipTextOn]}
+              >
+                {label}
+              </Text>
+              {mark ? <View style={styles.dot} /> : null}
+            </Pressable>
+          );
+        })}
+      </View>
       {circle.showLoading ? (
         <LoadingState />
-      ) : members.length === 0 && !error ? (
+      ) : visible.length === 0 && !error ? (
         <View style={styles.pad}>
-          <EmptyState message="No one in your circle yet. Add someone you trust." />
+          <EmptyState message={filter === 'pending' ? 'No pending invites.' : 'No one in your circle yet. Add someone you trust.'} />
         </View>
       ) : (
-        members.map((member) => {
+        visible.map((member) => {
           const badge = circleBadge(member);
           const pendingReceived = member.c_status === 'pending' && !member.is_sender;
           const pendingSent = member.c_status === 'pending' && member.is_sender;
           const name = shownName(member, localNames);
           return (
-            <View key={member.id} style={styles.member}>
+            <View key={member.id}>
               <ListCard
                 title={name}
                 subtitle={member.phone || ''}
@@ -212,32 +254,40 @@ export default function CircleScreen() {
                   >
                     <CrossIcon />
                   </Pressable>
+                ) : pendingReceived ? (
+                  <View style={styles.rowActions}>
+                    <Pressable
+                      style={styles.tick}
+                      hitSlop={8}
+                      disabled={workingId === member.id}
+                      onPress={async () => {
+                        const names = await contactNamesByPhone([member.phone]);
+                        respond(member.id, 'accepted', names[normalizePhone(member.phone)] || null);
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel="Accept invite"
+                    >
+                      <TickIcon />
+                    </Pressable>
+                    <Pressable
+                      hitSlop={8}
+                      disabled={workingId === member.id}
+                      onPress={() =>
+                        setConfirm({
+                          title: 'Decline this invite?',
+                          body: `${name} will not join your circle.`,
+                          confirmLabel: 'Decline',
+                          onConfirm: () => respond(member.id, 'declined'),
+                        })
+                      }
+                      accessibilityRole="button"
+                      accessibilityLabel="Decline invite"
+                    >
+                      <CrossIcon />
+                    </Pressable>
+                  </View>
                 ) : null}
               />
-              {pendingReceived ? (
-                <View style={styles.actions}>
-                  <PrimaryButton
-                    label="Accept"
-                    loading={workingId === member.id}
-                    onPress={async () => {
-                      const names = await contactNamesByPhone([member.phone]);
-                      respond(member.id, 'accepted', names[normalizePhone(member.phone)] || null);
-                    }}
-                  />
-                  <SecondaryButton
-                    label="Decline"
-                    disabled={workingId === member.id}
-                    onPress={() =>
-                      setConfirm({
-                        title: 'Decline this invite?',
-                        body: `${name} will not join your circle.`,
-                        confirmLabel: 'Decline',
-                        onConfirm: () => respond(member.id, 'declined'),
-                      })
-                    }
-                  />
-                </View>
-              ) : null}
             </View>
           );
         })
@@ -263,19 +313,64 @@ const styles = StyleSheet.create({
   pad: {
     paddingHorizontal: theme.layout.screenPadding,
   },
-  member: {
-    marginBottom: theme.spacing.sm,
-    paddingHorizontal: theme.layout.screenPadding,
+  rowActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: theme.spacing.sm,
   },
-  actions: {
+  filters: {
+    flexDirection: 'row',
+    flexWrap: 'nowrap',
     gap: theme.spacing.sm,
+    paddingHorizontal: theme.layout.screenPadding,
+    marginBottom: theme.spacing.lg,
+  },
+  chip: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.xs,
+    backgroundColor: theme.colors.bg3,
+    borderRadius: theme.radius.pill,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border2,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.sm,
+  },
+  chipOn: {
+    backgroundColor: theme.colors.greenDim,
+    borderColor: theme.colors.green,
+  },
+  chipText: {
+    flexShrink: 1,
+    fontFamily: theme.fonts.bodyMedium,
+    fontSize: theme.fontSize.body,
+    color: theme.colors.text2,
+  },
+  chipTextOn: {
+    color: theme.colors.green,
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: theme.colors.red,
   },
   bin: {
     width: 36,
     height: 36,
     borderRadius: 18,
     backgroundColor: theme.colors.redDim,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tick: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: theme.colors.greenDim,
     alignItems: 'center',
     justifyContent: 'center',
   },

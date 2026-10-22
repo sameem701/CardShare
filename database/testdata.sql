@@ -125,11 +125,12 @@ INSERT INTO circle (user_id, friend_id, c_status, created_at) VALUES
   ('aaaaaaaa-0002-4000-8000-000000000002', 'aaaaaaaa-0003-4000-8000-000000000003', 'pending',  (extract(epoch FROM timestamptz '2026-10-14 18:00:00+05') * 1000)::bigint);
 
 INSERT INTO requests (
-  id, requester_id, card_holder_id, card_id, merchant, product_url,
+  id, order_group_id, requester_id, card_holder_id, card_id, merchant, product_url,
   delivery_address, order_amount, actual_amount_paid, note, screenshot_url,
   rq_status, created_at, updated_at
 ) VALUES
   (
+    'rrrrrrrr-0001-4000-8000-000000000001',
     'rrrrrrrr-0001-4000-8000-000000000001',
     'aaaaaaaa-0001-4000-8000-000000000001',
     'aaaaaaaa-0002-4000-8000-000000000002',
@@ -147,6 +148,7 @@ INSERT INTO requests (
   ),
   (
     'rrrrrrrr-0002-4000-8000-000000000002',
+    'rrrrrrrr-0002-4000-8000-000000000002',
     'aaaaaaaa-0002-4000-8000-000000000002',
     'aaaaaaaa-0001-4000-8000-000000000001',
     'cccccccc-0001-4000-8000-000000000001',
@@ -163,6 +165,7 @@ INSERT INTO requests (
   ),
   (
     'rrrrrrrr-0003-4000-8000-000000000003',
+    'rrrrrrrr-0003-4000-8000-000000000003',
     'aaaaaaaa-0001-4000-8000-000000000001',
     'aaaaaaaa-0003-4000-8000-000000000003',
     'cccccccc-0003-4000-8000-000000000001',
@@ -178,6 +181,7 @@ INSERT INTO requests (
     (extract(epoch FROM timestamptz '2026-10-15 09:00:00+05') * 1000)::bigint
   ),
   (
+    'rrrrrrrr-0004-4000-8000-000000000004',
     'rrrrrrrr-0004-4000-8000-000000000004',
     'aaaaaaaa-0003-4000-8000-000000000003',
     'aaaaaaaa-0001-4000-8000-000000000001',

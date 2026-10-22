@@ -37,6 +37,11 @@ export function getCircleCards(sessionId, userId, friendId, options = {}) {
   return apiRequest(`/api/circle/${friendId}/cards`, { sessionId, userId, signal: options.signal });
 }
 
+export function getCardHolders(sessionId, userId, bank, tier, options = {}) {
+  const params = new URLSearchParams({ bank, tier });
+  return apiRequest(`/api/circle/card-holders?${params}`, { sessionId, userId, signal: options.signal });
+}
+
 export function removeFromCircle(sessionId, userId, friendId) {
   return apiRequest(`/api/circle/${friendId}`, {
     method: 'DELETE',

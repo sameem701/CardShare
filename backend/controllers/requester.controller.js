@@ -21,13 +21,51 @@ const withSignedScreenshots = async (records) => {
   return Promise.all(records.map((record) => attachSignedScreenshotUrl(record)));
 };
 
+function liveOrderError(err) {
+  const body = { error: err.message };
+  if (!String(err.message || '').startsWith('You already have a live order with ')) {
+    return body;
+  }
+  if (typeof err.detail !== 'string' || err.detail.trim() === '') return body;
+  try {
+    const ids = JSON.parse(err.detail);
+    if (Array.isArray(ids) && ids.every((id) => typeof id === 'string' && id.trim() !== '')) {
+      body.holder_ids = ids;
+    }
+  } catch {
+    return body;
+  }
+  return body;
+}
+
+function holdersFromBody(holders) {
+  if (!Array.isArray(holders) || holders.length === 0) {
+    return { error: 'Choose at least one person.' };
+  }
+  const cleaned = [];
+  const seen = new Set();
+  for (const holder of holders) {
+    const card_holder_id = holder && String(holder.card_holder_id || '').trim();
+    const card_id = holder && String(holder.card_id || '').trim();
+    if (!card_holder_id || !card_id) {
+      return { error: 'Each person needs a card.' };
+    }
+    if (seen.has(card_holder_id)) {
+      return { error: 'Each person can only be included once.' };
+    }
+    seen.add(card_holder_id);
+    cleaned.push({ card_holder_id, card_id });
+  }
+  return { holders: cleaned };
+}
+
 // POST /api/requester/requests
-// Sara creates a pending request against a circle friend's shared card.
+// One order, one row per selected person, same order_group_id.
+// holders: [{ card_holder_id, card_id }]
 const createRequest = async (req, res) => {
   const requester_id = req.user.id;
   const {
-    card_holder_id,
-    card_id,
+    holders,
     merchant,
     product_url,
     delivery_address,
@@ -35,11 +73,9 @@ const createRequest = async (req, res) => {
     note,
   } = req.body;
 
-  if (!card_holder_id || String(card_holder_id).trim() === '') {
-    return res.status(400).json({ error: 'card_holder_id is required.' });
-  }
-  if (!card_id || String(card_id).trim() === '') {
-    return res.status(400).json({ error: 'card_id is required.' });
+  const parsedHolders = holdersFromBody(holders);
+  if (parsedHolders.error) {
+    return res.status(400).json({ error: parsedHolders.error });
   }
   if (!merchant || String(merchant).trim() === '') {
     return res.status(400).json({ error: 'merchant is required.' });
@@ -64,21 +100,20 @@ const createRequest = async (req, res) => {
 
   try {
     const { rows } = await db.query(
-      `SELECT create_request($1, $2, $3, $4, $5, $6, $7, $8) AS result`,
+      `SELECT create_request($1, $2, $3, $4, $5, $6, $7::json) AS result`,
       [
         requester_id,
-        card_holder_id,
-        card_id,
         String(merchant).trim(),
         productLink,
         String(delivery_address).trim(),
         amount,
         note ? String(note).trim() : null,
+        JSON.stringify(parsedHolders.holders),
       ]
     );
     res.status(201).json(rows[0].result);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json(liveOrderError(err));
   }
 };
 

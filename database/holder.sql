@@ -6,6 +6,7 @@
          → submit_proof → Sara accept_proof or reject_proof
          → get_transaction_history_holder → confirm_paid
    Cancel of an accepted request writes a transaction and keeps the chat.
+   The first accept in an order group deletes the other pending rows.
    Delivery address is hidden until Ahmed accepts.
    ───────────────────────────────────────────────────────────── */
 
@@ -42,25 +43,75 @@ $$ LANGUAGE plpgsql;
 
 
 -- Ahmed accepts a pending request. The address becomes visible and chat can start.
+-- Every pending row in the order group is locked in id order. This row becomes
+-- accepted. The other pending rows in the group are deleted and are not restored
+-- if this order is cancelled later. A second accept finds its row gone.
 CREATE OR REPLACE FUNCTION accept_request(
   p_request_id VARCHAR(36),
   p_holder_id  VARCHAR(36)
 ) RETURNS JSON AS $$
 DECLARE
-  v_now BIGINT;
+  v_group  VARCHAR(36);
+  v_holder VARCHAR(36);
+  v_status VARCHAR(20);
+  v_now    BIGINT;
 BEGIN
+  SELECT order_group_id, card_holder_id, rq_status
+  INTO v_group, v_holder, v_status
+  FROM requests
+  WHERE id = p_request_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'This order was already taken.';
+  END IF;
+
+  IF v_holder <> p_holder_id OR v_status <> 'pending' THEN
+    RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
+  END IF;
+
+  PERFORM 1
+  FROM requests
+  WHERE order_group_id = v_group
+  AND rq_status = 'pending'
+  ORDER BY id
+  FOR UPDATE;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM requests
+    WHERE id = p_request_id
+    AND card_holder_id = p_holder_id
+    AND rq_status = 'pending'
+  ) THEN
+    RAISE EXCEPTION 'This order was already taken.';
+  END IF;
+
   v_now := extract(epoch from now()) * 1000;
 
   UPDATE requests
   SET rq_status  = 'accepted',
       updated_at = v_now
-  WHERE id = p_request_id
-  AND card_holder_id = p_holder_id
-  AND rq_status = 'pending';
+  WHERE id = p_request_id;
 
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
-  END IF;
+  DELETE FROM chat_messages
+  WHERE thread_id IN (
+    SELECT id FROM requests
+    WHERE order_group_id = v_group
+    AND id <> p_request_id
+    AND rq_status = 'pending'
+  );
+
+  DELETE FROM chat_reads
+  WHERE thread_id IN (
+    SELECT id FROM requests
+    WHERE order_group_id = v_group
+    AND id <> p_request_id
+    AND rq_status = 'pending'
+  );
+
+  DELETE FROM requests
+  WHERE order_group_id = v_group
+  AND id <> p_request_id
+  AND rq_status = 'pending';
 
   RETURN (
     SELECT row_to_json(r)

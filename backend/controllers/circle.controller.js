@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { ALLOWED_BANKS, ALLOWED_CARD_TIERS } = require('./cards.controller');
 
 const ALLOWED_INVITE_RESPONSES = ['accepted', 'declined'];
 
@@ -92,6 +93,36 @@ const getCircle = async (req, res) => {
   }
 };
 
+// GET /api/circle/card-holders?bank=&tier=
+// Accepted circle members sharing this bank and tier. Each row includes the
+// card to use and whether a live order already exists with that person.
+const getCardHolders = async (req, res) => {
+  const user_id = req.user.id;
+  const bank = String(req.query.bank || '').trim();
+  const tier = String(req.query.tier || '').trim();
+
+  if (!ALLOWED_BANKS.includes(bank)) {
+    return res.status(400).json({
+      error: `Invalid bank_name. Allowed: ${ALLOWED_BANKS.join(', ')}.`,
+    });
+  }
+  if (!ALLOWED_CARD_TIERS.includes(tier)) {
+    return res.status(400).json({
+      error: `Invalid card_tier. Allowed: ${ALLOWED_CARD_TIERS.join(', ')}.`,
+    });
+  }
+
+  try {
+    const { rows } = await db.query(
+      'SELECT get_holders_for_card($1, $2, $3) AS result',
+      [user_id, bank, tier]
+    );
+    res.json(rows[0].result ?? []);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
 // GET /api/circle/:friend_id/cards
 // Shared cards from an accepted circle friend (for creating a request)
 const getCircleCards = async (req, res) => {
@@ -166,6 +197,7 @@ module.exports = {
   respondToInvite,
   cancelInvite,
   getCircle,
+  getCardHolders,
   getCircleCards,
   removeFromCircle,
 };

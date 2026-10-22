@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Modal, Platform, Pressable, ScrollView, StatusBar, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import theme from '../constants/theme';
 
@@ -29,9 +29,16 @@ function Chevron({ up }) {
   );
 }
 
-function MenuFrame({ onClose, children }) {
+function MenuFrame({ onClose, frameRef, onFrame, children }) {
   const body = (
-    <Pressable style={styles.backdrop} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close">
+    <Pressable
+      ref={frameRef}
+      style={styles.backdrop}
+      onPress={onClose}
+      onLayout={onFrame}
+      accessibilityRole="button"
+      accessibilityLabel="Close"
+    >
       {children}
     </Pressable>
   );
@@ -48,22 +55,28 @@ function MenuFrame({ onClose, children }) {
 export default function Dropdown({ label, placeholder, options, value, onChange }) {
   const window = useWindowDimensions();
   const fieldRef = useRef(null);
+  const frameRef = useRef(null);
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState(null);
+  const [frameOrigin, setFrameOrigin] = useState(null);
   const [offset, setOffset] = useState(0);
   const [viewport, setViewport] = useState(0);
   const [content, setContent] = useState(0);
 
   const selected = options.find((item) => optionId(item) === value);
   const shown = selected ? optionLabel(selected) : '';
-  const rows = Math.min(options.length, VISIBLE_ROWS);
+  const list = options.length ? options : [{ id: '__none__', label: 'No options', empty: true }];
+  const rows = Math.min(list.length, VISIBLE_ROWS);
   const menuHeight = rows * ROW_HEIGHT;
   const canScroll = content > viewport + 1;
   const thumbHeight = canScroll ? Math.max(THUMB_MIN, (viewport / content) * viewport) : 0;
   const maxOffset = Math.max(content - viewport, 1);
   const thumbTop = canScroll ? (offset / maxOffset) * (viewport - thumbHeight) : 0;
 
-  const close = () => setOpen(false);
+  const close = () => {
+    setOpen(false);
+    setFrameOrigin(null);
+  };
 
   const toggle = () => {
     if (open) {
@@ -71,43 +84,59 @@ export default function Dropdown({ label, placeholder, options, value, onChange 
       return;
     }
     fieldRef.current?.measureInWindow((x, y, width, height) => {
+      if (!width || !height) return;
       setAnchor({ x, y, width, height });
       setOffset(0);
       setOpen(true);
     });
   };
 
+  const readFrame = () => {
+    requestAnimationFrame(() => {
+      frameRef.current?.measureInWindow((x, y) => {
+        setFrameOrigin({ x, y });
+      });
+    });
+  };
+
   let menuTop = 0;
-  if (anchor) {
+  let menuLeft = 0;
+  if (anchor && frameOrigin) {
+    const gap = theme.spacing.sm;
+    const shift = Platform.OS === 'android' ? (StatusBar.currentHeight || 0) : 0;
+    const localTop = anchor.y - frameOrigin.y + shift;
     const spaceBelow = window.height - (anchor.y + anchor.height);
     const spaceAbove = anchor.y;
-    const openUp = spaceBelow < menuHeight + theme.spacing.sm && spaceAbove > spaceBelow;
+    const openUp = spaceBelow < menuHeight + gap && spaceAbove > spaceBelow;
+    menuLeft = anchor.x - frameOrigin.x;
     menuTop = openUp
-      ? Math.max(theme.spacing.sm, anchor.y - menuHeight - theme.spacing.xs)
-      : anchor.y + anchor.height + theme.spacing.xs;
+      ? Math.max(gap, localTop - menuHeight - gap)
+      : localTop + anchor.height + gap;
   }
 
   return (
     <View style={styles.field}>
       {label ? <Text style={styles.label}>{label}</Text> : null}
-      <Pressable
-        ref={fieldRef}
-        style={styles.closed}
-        onPress={toggle}
-        accessibilityRole="button"
-        accessibilityLabel={label || placeholder}
-      >
-        <Text style={shown ? styles.closedValue : styles.closedPlaceholder} numberOfLines={1}>
-          {shown || placeholder}
-        </Text>
-        <Chevron up={open} />
-      </Pressable>
+      <View ref={fieldRef} collapsable={false}>
+        <Pressable
+          style={styles.closed}
+          onPress={toggle}
+          accessibilityRole="button"
+          accessibilityLabel={label || placeholder}
+        >
+          <Text style={shown ? styles.closedValue : styles.closedPlaceholder} numberOfLines={1}>
+            {shown || placeholder}
+          </Text>
+          <Chevron up={open} />
+        </Pressable>
+      </View>
       {open && anchor ? (
-        <MenuFrame onClose={close}>
-          <Pressable
-            style={[styles.menu, { top: menuTop, left: anchor.x, width: anchor.width, height: menuHeight }]}
-            onPress={(event) => event.stopPropagation()}
-          >
+        <MenuFrame onClose={close} frameRef={frameRef} onFrame={readFrame}>
+          {frameOrigin ? (
+            <Pressable
+              style={[styles.menu, { top: menuTop, left: menuLeft, width: anchor.width, height: menuHeight }]}
+              onPress={(event) => event.stopPropagation()}
+            >
             <ScrollView
               style={styles.scroller}
               nestedScrollEnabled
@@ -118,22 +147,24 @@ export default function Dropdown({ label, placeholder, options, value, onChange 
               onContentSizeChange={(_, height) => setContent(height)}
               onScroll={(event) => setOffset(event.nativeEvent.contentOffset.y)}
             >
-              {options.map((item) => {
+              {list.map((item) => {
                 const id = optionId(item);
                 const text = optionLabel(item);
-                const isSelected = id === value;
+                const isSelected = !item.empty && id === value;
                 return (
                   <Pressable
                     key={id}
                     style={[styles.option, isSelected && styles.optionOn]}
+                    disabled={Boolean(item.empty)}
                     accessibilityRole="button"
                     accessibilityLabel={text}
                     onPress={() => {
+                      if (item.empty) return;
                       onChange(id);
                       close();
                     }}
                   >
-                    <Text style={[styles.optionText, isSelected && styles.optionTextOn]} numberOfLines={1}>
+                    <Text style={[styles.optionText, item.empty && styles.optionEmpty, isSelected && styles.optionTextOn]} numberOfLines={1}>
                       {text}
                     </Text>
                   </Pressable>
@@ -145,7 +176,8 @@ export default function Dropdown({ label, placeholder, options, value, onChange 
                 <View style={[styles.thumb, { height: thumbHeight, transform: [{ translateY: thumbTop }] }]} />
               </View>
             ) : null}
-          </Pressable>
+            </Pressable>
+          ) : null}
         </MenuFrame>
       ) : null}
     </View>
@@ -198,7 +230,6 @@ const styles = StyleSheet.create({
   },
   backdrop: {
     flex: 1,
-    backgroundColor: theme.colors.overlay,
   },
   menu: {
     position: 'absolute',
@@ -230,6 +261,9 @@ const styles = StyleSheet.create({
   optionTextOn: {
     fontFamily: theme.fonts.bodyMedium,
     color: theme.colors.green,
+  },
+  optionEmpty: {
+    color: theme.colors.text3,
   },
   track: {
     position: 'absolute',

@@ -218,7 +218,7 @@ export default function HomeScreen() {
         <CircleStart
           members={members}
           onAdd={() => openScreen(navigation, 'add-circle')}
-          onOpenCircle={() => openCircle(navigation)}
+          onOpenCircle={() => openCircle(navigation, { pending: true })}
         />
         <Text style={styles.section}>Your cards</Text>
         {cardsError ? (

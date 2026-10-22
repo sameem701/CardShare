@@ -8,27 +8,38 @@
             or reject_proof (back to accepted, Ahmed can resubmit)
          → get_transaction_history_requester
    Sara pays Ahmed outside the app. No fees and no escrow.
+   One Start order can go to several people. They share order_group_id.
    One live request per friend pair.
    ───────────────────────────────────────────────────────────── */
 
 
--- Sara creates a request targeting one of Ahmed's shared cards.
--- Drops the old form that also took discount_percentage.
+-- Sara sends one order to one or more people. Each person gets their own request
+-- row and the same order_group_id. Nothing is inserted if any of them already
+-- has a live order with her. p_holders is a JSON array of
+-- { "card_holder_id", "card_id" }.
+-- Drops the old single-holder form, and the form that also took discount_percentage.
 DROP FUNCTION IF EXISTS create_request(VARCHAR, VARCHAR, VARCHAR, VARCHAR, TEXT, TEXT, INT, INT, TEXT);
+DROP FUNCTION IF EXISTS create_request(VARCHAR, VARCHAR, VARCHAR, VARCHAR, TEXT, TEXT, INT, TEXT);
 
 CREATE OR REPLACE FUNCTION create_request(
   p_requester_id     VARCHAR(36),
-  p_card_holder_id   VARCHAR(36),
-  p_card_id          VARCHAR(36),
   p_merchant         VARCHAR(100),
   p_product_url      TEXT,
   p_delivery_address TEXT,
   p_order_amount     INT,
-  p_note             TEXT
+  p_note             TEXT,
+  p_holders          JSON
 ) RETURNS JSON AS $$
 DECLARE
   v_request_id VARCHAR(36);
+  v_group_id   VARCHAR(36);
   v_now        BIGINT;
+  v_holder     JSON;
+  v_holder_id  VARCHAR(36);
+  v_card_id    VARCHAR(36);
+  v_live_count INT;
+  v_live_ids   JSON;
+  v_phrase     TEXT;
 BEGIN
   IF p_order_amount <= 100 THEN
     RAISE EXCEPTION 'Order amount must be greater than 100 PKR.';
@@ -44,56 +55,126 @@ BEGIN
     END IF;
   END IF;
 
-  IF NOT EXISTS (
-    SELECT 1 FROM circle
-    WHERE ((user_id = p_requester_id AND friend_id = p_card_holder_id)
-    OR (user_id = p_card_holder_id AND friend_id = p_requester_id))
-    AND c_status = 'accepted'
-  ) THEN
-    RAISE EXCEPTION 'This user is not in your circle.';
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1 FROM cards
-    WHERE id = p_card_id
-    AND user_id = p_card_holder_id
-    AND allow_sharing = 1
-  ) THEN
-    RAISE EXCEPTION 'Card not found.';
+  IF p_holders IS NULL OR json_typeof(p_holders) <> 'array' OR json_array_length(p_holders) = 0 THEN
+    RAISE EXCEPTION 'Choose at least one person.';
   END IF;
 
   IF EXISTS (
-    SELECT 1 FROM requests
-    WHERE requester_id = p_requester_id
-    AND card_holder_id = p_card_holder_id
-    AND rq_status IN ('pending', 'accepted', 'proof_submitted')
+    SELECT 1
+    FROM json_array_elements(p_holders) elem
+    GROUP BY elem->>'card_holder_id'
+    HAVING COUNT(*) > 1
   ) THEN
-    RAISE EXCEPTION 'You already have an active request with this person.';
+    RAISE EXCEPTION 'Each person can only be included once.';
   END IF;
 
-  v_request_id := uuid_generate_v4()::varchar;
+  FOR v_holder IN SELECT value FROM json_array_elements(p_holders)
+  LOOP
+    v_holder_id := NULLIF(TRIM(v_holder->>'card_holder_id'), '');
+    v_card_id := NULLIF(TRIM(v_holder->>'card_id'), '');
+
+    IF v_holder_id IS NULL OR v_card_id IS NULL THEN
+      RAISE EXCEPTION 'Each person needs a card.';
+    END IF;
+
+    IF v_holder_id = p_requester_id THEN
+      RAISE EXCEPTION 'You cannot request your own card.';
+    END IF;
+
+    IF NOT EXISTS (
+      SELECT 1 FROM circle
+      WHERE ((user_id = p_requester_id AND friend_id = v_holder_id)
+      OR (user_id = v_holder_id AND friend_id = p_requester_id))
+      AND c_status = 'accepted'
+    ) THEN
+      RAISE EXCEPTION 'This user is not in your circle.';
+    END IF;
+
+    IF NOT EXISTS (
+      SELECT 1 FROM cards
+      WHERE id = v_card_id
+      AND user_id = v_holder_id
+      AND allow_sharing = 1
+    ) THEN
+      RAISE EXCEPTION 'Card not found.';
+    END IF;
+  END LOOP;
+
+  PERFORM 1
+  FROM requests
+  WHERE requester_id = p_requester_id
+  AND card_holder_id IN (
+    SELECT elem->>'card_holder_id'
+    FROM json_array_elements(p_holders) elem
+  )
+  ORDER BY card_holder_id
+  FOR UPDATE;
+
+  SELECT COUNT(*), COALESCE(json_agg(card_holder_id ORDER BY card_holder_id), '[]'::json)
+  INTO v_live_count, v_live_ids
+  FROM requests
+  WHERE requester_id = p_requester_id
+  AND card_holder_id IN (
+    SELECT elem->>'card_holder_id'
+    FROM json_array_elements(p_holders) elem
+  );
+
+  IF v_live_count > 0 THEN
+    v_phrase := CASE WHEN v_live_count = 1 THEN '1 user' ELSE v_live_count::text || ' users' END;
+    RAISE EXCEPTION 'You already have a live order with %.', v_phrase
+      USING DETAIL = v_live_ids::text;
+  END IF;
+
+  v_group_id := uuid_generate_v4()::varchar;
   v_now := extract(epoch from now()) * 1000;
 
-  INSERT INTO requests (
-    id, requester_id, card_holder_id, card_id, merchant,
-    product_url, delivery_address, order_amount, note,
-    rq_status, created_at, updated_at
-  ) VALUES (
-    v_request_id, p_requester_id, p_card_holder_id, p_card_id, p_merchant,
-    p_product_url, p_delivery_address, p_order_amount, p_note,
-    'pending',
-    v_now,
-    v_now
-  );
+  FOR v_holder IN SELECT value FROM json_array_elements(p_holders)
+  LOOP
+    v_request_id := uuid_generate_v4()::varchar;
+    v_holder_id := TRIM(v_holder->>'card_holder_id');
+    v_card_id := TRIM(v_holder->>'card_id');
+
+    INSERT INTO requests (
+      id, order_group_id, requester_id, card_holder_id, card_id, merchant,
+      product_url, delivery_address, order_amount, note,
+      rq_status, created_at, updated_at
+    ) VALUES (
+      v_request_id, v_group_id, p_requester_id, v_holder_id, v_card_id, p_merchant,
+      p_product_url, p_delivery_address, p_order_amount, p_note,
+      'pending',
+      v_now,
+      v_now
+    );
+  END LOOP;
 
   RETURN (
-    SELECT row_to_json(r)
+    SELECT COALESCE(json_agg(r), '[]'::json)
     FROM (
-      SELECT id, requester_id, card_holder_id, card_id, merchant,
+      SELECT id, order_group_id, requester_id, card_holder_id, card_id, merchant,
              product_url, order_amount, note, rq_status, created_at
-      FROM requests WHERE id = v_request_id
+      FROM requests
+      WHERE order_group_id = v_group_id
+      ORDER BY id
     ) r
   );
+EXCEPTION
+  WHEN unique_violation THEN
+    SELECT COUNT(*), COALESCE(json_agg(card_holder_id ORDER BY card_holder_id), '[]'::json)
+    INTO v_live_count, v_live_ids
+    FROM requests
+    WHERE requester_id = p_requester_id
+    AND card_holder_id IN (
+      SELECT elem->>'card_holder_id'
+      FROM json_array_elements(p_holders) elem
+    );
+
+    IF v_live_count = 0 THEN
+      v_live_count := 1;
+    END IF;
+
+    v_phrase := CASE WHEN v_live_count = 1 THEN '1 user' ELSE v_live_count::text || ' users' END;
+    RAISE EXCEPTION 'You already have a live order with %.', v_phrase
+      USING DETAIL = COALESCE(v_live_ids::text, '[]');
 END;
 $$ LANGUAGE plpgsql;
 
