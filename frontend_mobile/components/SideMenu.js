@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
+import { useQuery } from '@tanstack/react-query';
 import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
 import { useTopInset } from '../hooks/useTopInset';
+import { loadHistory } from '../queries/history';
 import { formatDisplayName } from '../utils/initials';
 import ConfirmDialog from './ConfirmDialog';
 
@@ -43,8 +45,13 @@ function MenuIcon({ name, color, size = 22 }) {
 }
 
 export default function SideMenu({ visible, onClose, onHistory, onHowItWorks, onLoggedOut }) {
-  const { user, signOut } = useSession();
+  const { sessionId, user, signOut } = useSession();
   const topInset = useTopInset();
+  const history = useQuery({
+    queryKey: ['history', user?.id],
+    queryFn: ({ signal, client }) => loadHistory(sessionId, user.id, { signal, client }),
+    enabled: Boolean(sessionId && user?.id),
+  });
   const progress = useRef(new Animated.Value(0)).current;
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [working, setWorking] = useState(false);
@@ -78,6 +85,8 @@ export default function SideMenu({ visible, onClose, onHistory, onHowItWorks, on
 
   if (!visible) return null;
 
+  const finishedCount = (history.data?.asRequester?.length || 0) + (history.data?.asHolder?.length || 0);
+  const showHistory = history.isError || Boolean(history.data?.error) || finishedCount > 0;
   const opacity = progress;
   const translateY = progress.interpolate({
     inputRange: [0, 1],
@@ -102,10 +111,12 @@ export default function SideMenu({ visible, onClose, onHistory, onHowItWorks, on
             <MenuIcon name="profile" color={theme.colors.text} size={22} />
             <Text style={styles.name} numberOfLines={1}>{formatDisplayName(user?.display_name) || 'Account'}</Text>
           </View>
-          <Pressable style={styles.row} onPress={onHistory} accessibilityRole="button" accessibilityLabel="History">
-            <MenuIcon name="history" color={theme.colors.text2} size={22} />
-            <Text style={styles.rowText}>History</Text>
-          </Pressable>
+          {showHistory ? (
+            <Pressable style={styles.row} onPress={onHistory} accessibilityRole="button" accessibilityLabel="History">
+              <MenuIcon name="history" color={theme.colors.text2} size={22} />
+              <Text style={styles.rowText}>History</Text>
+            </Pressable>
+          ) : null}
           <Pressable style={styles.row} onPress={onHowItWorks} accessibilityRole="button" accessibilityLabel="How it works">
             <MenuIcon name="guide" color={theme.colors.text2} size={22} />
             <Text style={styles.rowText}>How it works</Text>

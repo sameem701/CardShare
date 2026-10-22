@@ -1,7 +1,5 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { getHolderHistory } from '../api/holder';
-import { getRequesterHistory } from '../api/requester';
 import EmptyState from '../components/EmptyState';
 import ErrorBanner from '../components/ErrorBanner';
 import ListCard from '../components/ListCard';
@@ -11,8 +9,9 @@ import TopBar from '../components/TopBar';
 import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
 import { openScreen } from '../navigation/openScreen';
+import { loadHistory } from '../queries/history';
 import { useScreenQuery } from '../queries/useScreenQuery';
-import { asList, formatDate, formatPkr } from '../utils/format';
+import { formatDate, formatPkr } from '../utils/format';
 import { txnStatusLabel, txnStatusVariant } from '../utils/orderRules';
 
 export default function HistoryScreen() {
@@ -20,27 +19,7 @@ export default function HistoryScreen() {
   const { sessionId, user } = useSession();
   const history = useScreenQuery(
     ['history', user?.id],
-    async ({ signal, client }) => {
-      const previous = client.getQueryData(['history', user.id]) || {};
-      const [req, hold] = await Promise.allSettled([
-        getRequesterHistory(sessionId, user.id, { signal }),
-        getHolderHistory(sessionId, user.id, { signal }),
-      ]);
-      if (signal?.aborted) {
-        const aborted = new Error('Aborted');
-        aborted.name = 'AbortError';
-        throw aborted;
-      }
-      const failed = [req, hold].filter((result) => result.status === 'rejected');
-      if (failed.length === 2) {
-        throw new Error(failed[0].reason?.message || 'Could not load history.');
-      }
-      return {
-        asRequester: req.status === 'fulfilled' ? asList(req.value) : (previous.asRequester || []),
-        asHolder: hold.status === 'fulfilled' ? asList(hold.value) : (previous.asHolder || []),
-        error: failed.length ? (failed[0].reason?.message || 'Could not load history.') : '',
-      };
-    }
+    ({ signal, client }) => loadHistory(sessionId, user.id, { signal, client })
   );
   const asRequester = history.data?.asRequester || [];
   const asHolder = history.data?.asHolder || [];

@@ -1,7 +1,7 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import theme from '../constants/theme';
-import PrimaryButton from './PrimaryButton';
+import HomePanel from './HomePanel';
 
 const PAYOFF = 'Add someone you trust. Their card can lower the price. Yours can earn when you shop for them.';
 
@@ -49,11 +49,8 @@ export default function CircleStart({ members, onAdd, onOpenCircle }) {
     button = 'Add someone else';
   }
 
-  return (
-    <View style={styles.card}>
-      <CircleMark />
-      <Text style={[styles.title, emphasize && styles.titleEmphasis]}>{title}</Text>
-      {body ? <Text style={styles.body}>{body}</Text> : null}
+  const names = (
+    <>
       {invited && received.length > 1 ? received.map((member) => (
         <Text key={member.id} style={styles.person}>{personName(member)}</Text>
       )) : null}
@@ -62,49 +59,28 @@ export default function CircleStart({ members, onAdd, onOpenCircle }) {
           {personName(member)} — waiting for them to accept.
         </Text>
       ))}
-      <View style={styles.action}>
-        <PrimaryButton label={button} onPress={onPress} />
-      </View>
-    </View>
+    </>
+  );
+
+  return (
+    <HomePanel
+      mark={<CircleMark />}
+      title={title}
+      emphasize={emphasize}
+      body={body}
+      extra={names}
+      button={button}
+      onPress={onPress}
+    />
   );
 }
 
 const styles = StyleSheet.create({
-  card: {
-    marginHorizontal: theme.layout.screenPadding,
-    backgroundColor: theme.colors.greenDim,
-    borderRadius: theme.radius.card,
-    borderWidth: 1,
-    borderColor: theme.colors.green,
-    padding: theme.spacing.xl,
-    marginBottom: theme.spacing.lg,
-  },
-  title: {
-    fontFamily: theme.fonts.display,
-    fontSize: 28,
-    lineHeight: 36,
-    color: theme.colors.text,
-    marginTop: theme.spacing.lg,
-  },
-  titleEmphasis: {
-    fontSize: theme.fontSize.display,
-    lineHeight: 42,
-  },
-  body: {
-    fontFamily: theme.fonts.body,
-    fontSize: theme.fontSize.input,
-    lineHeight: 22,
-    color: theme.colors.text2,
-    marginTop: theme.spacing.sm,
-  },
   person: {
     fontFamily: theme.fonts.bodyMedium,
     fontSize: theme.fontSize.input,
     lineHeight: 24,
     color: theme.colors.text,
     marginTop: theme.spacing.sm,
-  },
-  action: {
-    marginTop: theme.spacing.lg,
   },
 });

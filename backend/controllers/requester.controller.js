@@ -2,6 +2,7 @@ const db = require('../config/db');
 const { normalizeProductUrl } = require('../utils/productUrl');
 const { attachSignedScreenshotUrl } = require('../utils/screenshotStorage');
 const { unreadCountMap, withUnreadCounts } = require('../utils/unreadCounts');
+const { listUnpaid, getTransactionForUser } = require('../utils/transactions');
 
 const MIN_ORDER_AMOUNT_PKR = 100;
 
@@ -212,8 +213,32 @@ const rejectProof = async (req, res) => {
   }
 };
 
+// GET /api/requester/unpaid
+// Orders Sara has accepted that Ahmed has not marked paid.
+const getUnpaid = async (req, res) => {
+  try {
+    res.json(await listUnpaid('requester_id', req.user.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
+// GET /api/requester/transactions/:id
+const getTransaction = async (req, res) => {
+  const txn_id = req.params.id;
+  if (!txn_id || String(txn_id).trim() === '') {
+    return res.status(400).json({ error: 'Transaction id is required.' });
+  }
+
+  try {
+    res.json(await getTransactionForUser(txn_id, req.user.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
 // GET /api/requester/history
-// unpaid, paid, cancelled_by_requester, cancelled_by_holder. Includes delivery_address.
+// Paid and cancelled only. Includes delivery_address.
 // Includes card_id when the transaction was stored with one.
 const getTransactionHistory = async (req, res) => {
   const requester_id = req.user.id;
@@ -236,5 +261,7 @@ module.exports = {
   cancelRequest,
   acceptProof,
   rejectProof,
+  getUnpaid,
+  getTransaction,
   getTransactionHistory,
 };

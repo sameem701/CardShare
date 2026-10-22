@@ -111,6 +111,7 @@ export default function OrderDetailHolderScreen() {
     setCancelError('');
     try {
       await cancelOrder(sessionId, user.id, orderId, reason);
+      await queryClient.invalidateQueries({ queryKey: ['history', user.id] });
       setCancelOpen(false);
       showToast('Order cancelled');
       navigation.goBack();

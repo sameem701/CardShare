@@ -63,6 +63,14 @@ export function getHolderHistory(sessionId, userId, options = {}) {
   return apiRequest('/api/holder/history', { sessionId, userId, signal: options.signal });
 }
 
+export function getUnpaidOrders(sessionId, userId, options = {}) {
+  return apiRequest('/api/holder/unpaid', { sessionId, userId, signal: options.signal });
+}
+
+export function getHolderTransaction(sessionId, userId, txnId, options = {}) {
+  return apiRequest(`/api/holder/transactions/${txnId}`, { sessionId, userId, signal: options.signal });
+}
+
 export function confirmPaid(sessionId, userId, txnId) {
   return apiRequest(`/api/holder/transactions/${txnId}/confirm-paid`, {
     method: 'POST',

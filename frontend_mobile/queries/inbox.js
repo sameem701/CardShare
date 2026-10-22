@@ -1,7 +1,7 @@
 import { queryOptions, useQuery } from '@tanstack/react-query';
 import { useIsFocused } from '@react-navigation/native';
-import { getActiveOrders, getIncomingRequests } from '../api/holder';
-import { getActiveRequests } from '../api/requester';
+import { getActiveOrders, getIncomingRequests, getUnpaidOrders } from '../api/holder';
+import { getActiveRequests, getUnpaidRequests } from '../api/requester';
 import { useSession } from '../context/SessionContext';
 import { buildRequestItems, isYourTurn, unreadTotal } from '../utils/requestInbox';
 import { queryClient } from './client';
@@ -14,13 +14,15 @@ function aborted(signal) {
 }
 
 export async function loadInbox(sessionId, userId, signal) {
-  const [sent, incoming, holding] = await Promise.allSettled([
+  const [sent, incoming, holding, unpaidAsked, unpaidHolding] = await Promise.allSettled([
     getActiveRequests(sessionId, userId, { signal }),
     getIncomingRequests(sessionId, userId, { signal }),
     getActiveOrders(sessionId, userId, { signal }),
+    getUnpaidRequests(sessionId, userId, { signal }),
+    getUnpaidOrders(sessionId, userId, { signal }),
   ]);
   aborted(signal);
-  const next = buildRequestItems(sent, incoming, holding);
+  const next = buildRequestItems(sent, incoming, holding, unpaidAsked, unpaidHolding);
   if (next.failedAll) {
     throw new Error(next.error || 'Could not load requests.');
   }

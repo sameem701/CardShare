@@ -2,6 +2,7 @@
 // A live proof has no stored share yet, so the same rounding is applied here.
 
 function whole(value) {
+  if (value == null || value === '') return null;
   const amount = Number(value);
   return Number.isFinite(amount) ? amount : null;
 }

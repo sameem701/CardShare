@@ -135,6 +135,7 @@ CREATE TRIGGER requests_order_group
 /* ── TRANSACTIONS ───────────────────────────────────────────── */
 -- Written when Sara accepts proof, or when either person cancels an accepted request.
 -- txn_status: unpaid, paid, cancelled_by_requester, cancelled_by_holder.
+-- History is paid or either cancel. Unpaid stays open until Ahmed marks it paid.
 -- cancel_reason is required for the two cancelled statuses.
 -- Closed orders are a snapshot. Nothing here points at cards or users, so
 -- deleting a card leaves the row, the amounts, and the copied names in place.
@@ -206,6 +207,49 @@ ALTER TABLE transactions ALTER COLUMN card_holder_name DROP DEFAULT;
 ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_card_id_fkey;
 ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_requester_id_fkey;
 ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_card_holder_id_fkey;
+
+-- One transaction for either person. Includes an unpaid order, which history leaves out.
+CREATE OR REPLACE FUNCTION get_transaction(
+  p_txn_id  VARCHAR(36),
+  p_user_id VARCHAR(36)
+) RETURNS JSON AS $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM transactions
+    WHERE id = p_txn_id
+    AND (requester_id = p_user_id OR card_holder_id = p_user_id)
+  ) THEN
+    RAISE EXCEPTION 'Transaction not found or access denied.';
+  END IF;
+
+  RETURN (
+    SELECT row_to_json(t)
+    FROM (
+      SELECT
+        txn.id,
+        txn.requester_id,
+        txn.requester_name,
+        txn.card_holder_id,
+        txn.card_holder_name,
+        txn.merchant,
+        txn.delivery_address,
+        txn.order_amount,
+        txn.card_id,
+        txn.bank_name,
+        txn.card_tier,
+        txn.actual_amount_paid,
+        txn.holder_share,
+        txn.screenshot_url,
+        txn.txn_status,
+        txn.cancel_reason,
+        txn.created_at,
+        txn.updated_at
+      FROM transactions txn
+      WHERE txn.id = p_txn_id
+    ) t
+  );
+END;
+$$ LANGUAGE plpgsql;
 
 /* ── CHAT ───────────────────────────────────────────────────── */
 -- thread_id is the request id while the order is live.

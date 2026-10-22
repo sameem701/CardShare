@@ -6,6 +6,8 @@ const controller = require('../controllers/requester.controller');
 router.use(auth);
 
 router.get('/history', controller.getTransactionHistory);
+router.get('/unpaid', controller.getUnpaid);
+router.get('/transactions/:id', controller.getTransaction);
 router.get('/requests', controller.getActiveRequests);
 router.post('/requests', controller.createRequest);
 router.get('/requests/:id', controller.getRequest);

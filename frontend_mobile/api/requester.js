@@ -45,3 +45,11 @@ export function rejectProof(sessionId, userId, requestId) {
 export function getRequesterHistory(sessionId, userId, options = {}) {
   return apiRequest('/api/requester/history', { sessionId, userId, signal: options.signal });
 }
+
+export function getUnpaidRequests(sessionId, userId, options = {}) {
+  return apiRequest('/api/requester/unpaid', { sessionId, userId, signal: options.signal });
+}
+
+export function getRequesterTransaction(sessionId, userId, txnId, options = {}) {
+  return apiRequest(`/api/requester/transactions/${txnId}`, { sessionId, userId, signal: options.signal });
+}

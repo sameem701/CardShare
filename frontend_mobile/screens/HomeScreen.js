@@ -3,22 +3,25 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { deleteCard, getCards, toggleCardSharing } from '../api/cards';
 import { getCircle } from '../api/circle';
-import { getActiveOrders, getHolderHistory, getIncomingRequests } from '../api/holder';
-import { getActiveRequests, getRequesterHistory } from '../api/requester';
+import { getActiveOrders, getHolderHistory, getIncomingRequests, getUnpaidOrders } from '../api/holder';
+import { getActiveRequests, getRequesterHistory, getUnpaidRequests } from '../api/requester';
 import CircleStart from '../components/CircleStart';
+import HomeNotice from '../components/HomeNotice';
+import HomePanel from '../components/HomePanel';
 import ConfirmDialog from '../components/ConfirmDialog';
 import EmptyState from '../components/EmptyState';
 import HomeStats from '../components/HomeStats';
 import ErrorBanner from '../components/ErrorBanner';
 import ListCard from '../components/ListCard';
 import LoadingState from '../components/LoadingState';
+import PrimaryButton from '../components/PrimaryButton';
 import ScreenShell from '../components/ScreenShell';
 import TopBar from '../components/TopBar';
 import CardCarousel from '../components/CardCarousel';
 import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
 import { useAppActions } from '../navigation/AppActions';
-import { openCircle, openScreen } from '../navigation/openScreen';
+import { openCircle, openRequests, openScreen } from '../navigation/openScreen';
 import { useScreenQuery } from '../queries/useScreenQuery';
 import { queryClient } from '../queries/client';
 import { dashboardStats } from '../utils/dashboard';
@@ -28,6 +31,44 @@ import { REQUEST_STATUS_LABELS, TXN_STATUS_LABELS, requestStatusVariant, txnStat
 
 function reasonMessage(result, fallback) {
   return result.reason?.message || fallback;
+}
+
+function inviteName(member) {
+  return member.contact_name || member.display_name || 'Someone';
+}
+
+function homeNotice(invites, waiting, navigation) {
+  if (invites.length === 1) {
+    return {
+      text: `${inviteName(invites[0])} invited you`,
+      action: 'See invite',
+      onPress: () => openCircle(navigation, { pending: true }),
+    };
+  }
+  if (invites.length > 1) {
+    return {
+      text: 'You have invites',
+      action: 'See invites',
+      onPress: () => openCircle(navigation, { pending: true }),
+    };
+  }
+  if (waiting.length === 1) {
+    const item = waiting[0];
+    const card = item.bank ? `your ${item.bank} card` : 'your card';
+    return {
+      text: `${item.name} asked to use ${card} · ${formatPkr(item.amount)}`,
+      action: 'Review',
+      onPress: () => openScreen(navigation, 'order-detail', { orderId: item.id }),
+    };
+  }
+  if (waiting.length > 1) {
+    return {
+      text: `${waiting.length} requests are waiting`,
+      action: 'Review',
+      onPress: () => openRequests(navigation),
+    };
+  }
+  return null;
 }
 
 export default function HomeScreen() {
@@ -42,13 +83,15 @@ export default function HomeScreen() {
     ['home', user?.id],
     async ({ signal, client }) => {
       const previous = client.getQueryData(['home', user.id]) || {};
-      const [cardRows, incomingRows, holderOrders, sentRows, holderHistory, requesterHistory] = await Promise.allSettled([
+      const [cardRows, incomingRows, holderOrders, sentRows, holderHistory, requesterHistory, unpaidHeld, unpaidAsked] = await Promise.allSettled([
         getCards(sessionId, user.id, { signal }),
         getIncomingRequests(sessionId, user.id, { signal }),
         getActiveOrders(sessionId, user.id, { signal }),
         getActiveRequests(sessionId, user.id, { signal }),
         getHolderHistory(sessionId, user.id, { signal }),
         getRequesterHistory(sessionId, user.id, { signal }),
+        getUnpaidOrders(sessionId, user.id, { signal }),
+        getUnpaidRequests(sessionId, user.id, { signal }),
       ]);
       if (signal?.aborted) {
         const aborted = new Error('Aborted');
@@ -59,7 +102,7 @@ export default function HomeScreen() {
       const cards = cardRows.status === 'fulfilled' ? asList(cardRows.value) : (previous.cards || []);
       const cardsError = cardRows.status === 'fulfilled' ? '' : reasonMessage(cardRows, 'Could not load cards.');
 
-      const recentResults = [incomingRows, holderOrders, sentRows, holderHistory];
+      const recentResults = [incomingRows, holderOrders, sentRows, unpaidHeld];
       const failed = recentResults.filter((result) => result.status === 'rejected');
       const items = [];
       if (incomingRows.status === 'fulfilled') {
@@ -101,19 +144,17 @@ export default function HomeScreen() {
           }))
         );
       }
-      if (holderHistory.status === 'fulfilled') {
+      if (unpaidHeld.status === 'fulfilled') {
         items.push(
-          ...asList(holderHistory.value)
-            .filter((item) => item.txn_status === 'unpaid')
-            .map((item) => ({
-              key: `unpaid-${item.id}`,
-              updatedAt: item.updated_at || item.created_at,
-              title: item.merchant,
-              subtitle: `${item.requester_name || 'Someone'} · ${formatPkr(amountOwed(item))} still to receive`,
-              badge: TXN_STATUS_LABELS.unpaid,
-              badgeVariant: txnStatusVariant('unpaid'),
-              nav: { screen: 'transaction-detail', params: { txnId: item.id, role: 'holder' } },
-            }))
+          ...asList(unpaidHeld.value).map((item) => ({
+            key: `unpaid-${item.id}`,
+            updatedAt: item.updated_at || item.created_at,
+            title: item.merchant,
+            subtitle: `${item.requester_name || 'Someone'} · ${formatPkr(amountOwed(item))} still to receive`,
+            badge: TXN_STATUS_LABELS.unpaid,
+            badgeVariant: txnStatusVariant('unpaid'),
+            nav: { screen: 'transaction-detail', params: { txnId: item.id, role: 'holder' } },
+          }))
         );
       }
       items.sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
@@ -123,6 +164,21 @@ export default function HomeScreen() {
           ? reasonMessage(failed[0], 'Could not load recent orders.')
           : 'Some recent orders could not be loaded.')
         : '';
+
+      const waiting = incomingRows.status === 'fulfilled'
+        ? asList(incomingRows.value).map((item) => ({
+          id: item.id,
+          name: item.requester_name || 'Someone',
+          bank: item.bank_name || '',
+          amount: item.order_amount,
+        }))
+        : (previous.waiting || []);
+
+      const sentCount = sentRows.status === 'fulfilled' ? asList(sentRows.value).length : null;
+      const askedCount = requesterHistory.status === 'fulfilled' ? asList(requesterHistory.value).length : null;
+      const unpaidAskedCount = unpaidAsked.status === 'fulfilled' ? asList(unpaidAsked.value).length : null;
+      const hasSentOrder = (sentCount || 0) + (askedCount || 0) + (unpaidAskedCount || 0) > 0
+        || (unpaidAskedCount == null && Boolean(previous.hasSentOrder));
 
       const statsFailed = [holderHistory, requesterHistory].filter((result) => result.status === 'rejected');
       const stats = statsFailed.length && previous.stats
@@ -139,6 +195,8 @@ export default function HomeScreen() {
         recentError,
         stats,
         statsError: statsFailed.length ? 'Some totals could not be loaded.' : '',
+        hasSentOrder,
+        waiting,
       };
     }
   );
@@ -154,6 +212,12 @@ export default function HomeScreen() {
   const cards = home.data?.cards || [];
   const recent = home.data?.recent || [];
   const stats = home.data?.stats || null;
+  const showStats = (stats?.holderOrders || 0) + (stats?.requesterOrders || 0) > 0;
+  const showHomeOrder = Boolean(home.data) && !showStats;
+  const hasSentOrder = Boolean(home.data?.hasSentOrder);
+  const waiting = home.data?.waiting || [];
+  const receivedInvites = members.filter((member) => member.c_status === 'pending' && !member.is_sender);
+  const notice = homeNotice(receivedInvites, waiting, navigation);
   const cardsError = actionError || home.data?.cardsError || '';
   const recentError = home.data?.recentError || '';
   const statsError = home.data?.statsError || '';
@@ -253,10 +317,27 @@ export default function HomeScreen() {
           <ErrorBanner message={circle.errorMessage || 'Could not load your circle.'} onRetry={onRefresh} />
         </View>
       ) : null}
-      <HomeStats stats={stats} />
+      {notice ? <HomeNotice text={notice.text} action={notice.action} onPress={notice.onPress} /> : null}
+      {showStats ? <HomeStats stats={stats} /> : null}
       <View style={styles.pad}>
         <ErrorBanner message={statsError} onRetry={onRefresh} />
       </View>
+      {showHomeOrder && !hasSentOrder ? (
+        <HomePanel
+          title="Start your first order."
+          body="Pick a card from your circle. They place the order. You get the discount and pay them back."
+          button="Start first order"
+          onPress={() => openScreen(navigation, 'create-request')}
+        />
+      ) : null}
+      {showHomeOrder && hasSentOrder ? (
+        <View style={styles.orderAction}>
+          <PrimaryButton
+            label="Request order"
+            onPress={() => openScreen(navigation, 'create-request')}
+          />
+        </View>
+      ) : null}
       <Text style={styles.section}>Your cards</Text>
       {cardsError ? (
         <View style={styles.pad}>
@@ -351,5 +432,9 @@ const styles = StyleSheet.create({
   },
   pad: {
     paddingHorizontal: theme.layout.screenPadding,
+  },
+  orderAction: {
+    paddingHorizontal: theme.layout.screenPadding,
+    marginBottom: theme.spacing.lg,
   },
 });

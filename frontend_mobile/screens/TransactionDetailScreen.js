@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { confirmPaid, getHolderHistory } from '../api/holder';
-import { getRequesterHistory } from '../api/requester';
+import { confirmPaid, getHolderTransaction } from '../api/holder';
+import { getRequesterTransaction } from '../api/requester';
 import LoadingState from '../components/LoadingState';
 import Badge from '../components/Badge';
 import { DetailCard, DetailRow } from '../components/DetailCard';
@@ -31,10 +31,10 @@ export default function TransactionDetailScreen() {
   const txn = useScreenQuery(
     ['transaction', user?.id, role, txnId],
     async ({ signal }) => {
-      const rows = role === 'holder'
-        ? await getHolderHistory(sessionId, user.id, { signal })
-        : await getRequesterHistory(sessionId, user.id, { signal });
-      return (Array.isArray(rows) ? rows : []).find((item) => item.id === txnId) || null;
+      const row = role === 'holder'
+        ? await getHolderTransaction(sessionId, user.id, txnId, { signal })
+        : await getRequesterTransaction(sessionId, user.id, txnId, { signal });
+      return row || null;
     }
   );
   const data = txn.data;
@@ -48,6 +48,7 @@ export default function TransactionDetailScreen() {
     await queryClient.invalidateQueries({ queryKey: ['history', user.id] });
     await queryClient.invalidateQueries({ queryKey: ['history-list', user.id] });
     await queryClient.invalidateQueries({ queryKey: ['home', user.id] });
+    await queryClient.invalidateQueries({ queryKey: ['inbox', user.id] });
     return txn.refetch();
   };
 

@@ -372,6 +372,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 
+-- Paid and cancelled orders only. An unpaid order stays off history.
 CREATE OR REPLACE FUNCTION get_transaction_history_holder(
   p_holder_id VARCHAR(36)
 ) RETURNS JSON AS $$
@@ -397,6 +398,7 @@ BEGIN
         txn.requester_name
       FROM transactions txn
       WHERE txn.card_holder_id = p_holder_id
+      AND txn.txn_status IN ('paid', 'cancelled_by_requester', 'cancelled_by_holder')
       ORDER BY txn.created_at DESC
     ) t
   );

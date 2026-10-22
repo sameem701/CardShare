@@ -67,6 +67,7 @@ export default function RequestDetailRequesterScreen() {
     setCancelError('');
     try {
       await cancelRequest(sessionId, user.id, requestId, reason || undefined);
+      await queryClient.invalidateQueries({ queryKey: ['history', user.id] });
       setCancelOpen(false);
       setConfirmCancel(false);
       showToast('Request cancelled');

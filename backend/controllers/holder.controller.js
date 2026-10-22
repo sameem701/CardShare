@@ -7,6 +7,7 @@ const {
   verifyScreenshotFile,
 } = require('../utils/screenshotStorage');
 const { unreadCountMap, withUnreadCounts } = require('../utils/unreadCounts');
+const { listUnpaid, getTransactionForUser } = require('../utils/transactions');
 
 const MIN_ORDER_AMOUNT_PKR = 100;
 
@@ -232,8 +233,30 @@ const submitProof = async (req, res) => {
   }
 };
 
+// GET /api/holder/unpaid
+// Orders waiting for Ahmed to mark the money received.
+const getUnpaid = async (req, res) => {
+  try {
+    res.json(await listUnpaid('card_holder_id', req.user.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
+// GET /api/holder/transactions/:id
+const getTransaction = async (req, res) => {
+  const txn_id = requireId(req, res, 'Transaction id');
+  if (!txn_id) return;
+
+  try {
+    res.json(await getTransactionForUser(txn_id, req.user.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
 // GET /api/holder/history
-// unpaid, paid, cancelled_by_requester, cancelled_by_holder. No delivery address.
+// Paid and cancelled only.
 // Includes card_id when the transaction was stored with one.
 const getTransactionHistory = async (req, res) => {
   const holder_id = req.user.id;
@@ -277,5 +300,7 @@ module.exports = {
   getScreenshotUploadUrl,
   submitProof,
   getTransactionHistory,
+  getUnpaid,
+  getTransaction,
   confirmPaid,
 };
