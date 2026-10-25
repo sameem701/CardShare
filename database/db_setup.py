@@ -1,5 +1,5 @@
 """
-Database Setup Script for CardCircle System
+Database Setup Script for CardShare System
 Connects to Supabase PostgreSQL and executes SQL schema files
 """
 

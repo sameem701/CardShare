@@ -87,7 +87,7 @@ export default function AddCircleScreen() {
     <ScreenShell>
       <TopBar title="Add to circle" onBack={() => navigation.goBack()} />
       <View style={styles.scroll}>
-        <Text style={styles.subtitle}>Find them by the phone number they use on CardCircle. A contact name is shown only to you.</Text>
+        <Text style={styles.subtitle}>Find them by the phone number they use on CardShare. A contact name is shown only to you.</Text>
         <View style={styles.choose}>
           <SecondaryButton label="Choose from contacts" onPress={chooseContact} disabled={loading} />
         </View>

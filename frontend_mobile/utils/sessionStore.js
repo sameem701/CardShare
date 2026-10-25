@@ -2,7 +2,7 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 
-const KEY = 'cardcircle_session';
+const KEY = 'cardshare_session';
 
 export async function readStoredSession() {
   if (Platform.OS === 'web') return AsyncStorage.getItem(KEY);

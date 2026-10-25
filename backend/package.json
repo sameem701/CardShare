@@ -1,7 +1,7 @@
 {
-  "name": "cardcircle-backend",
+  "name": "cardshare-backend",
   "version": "1.0.0",
-  "description": "CardCircle backend API for a trust-based card sharing for discounts",
+  "description": "CardShare backend API for a trust-based card sharing for discounts",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

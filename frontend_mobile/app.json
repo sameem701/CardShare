@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "CardCircle",
-    "slug": "cardcircle",
+    "name": "CardShare",
+    "slug": "cardshare",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -11,7 +11,7 @@
       "supportsTablet": true
     },
     "android": {
-      "package": "com.cardcircle.app",
+      "package": "com.cardshare.app",
       "adaptiveIcon": {
         "backgroundColor": "#0A0D0F",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -28,14 +28,14 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "CardCircle needs photos for order proof and chat images."
+          "photosPermission": "CardShare needs photos for order proof and chat images."
         }
       ],
       "expo-secure-store",
       [
         "expo-contacts",
         {
-          "contactsPermission": "CardCircle uses your contacts to show the name you saved for someone."
+          "contactsPermission": "CardShare uses your contacts to show the name you saved for someone."
         }
       ]
     ]

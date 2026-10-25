@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 
-const SCROLLBAR_STYLE_ID = 'cardcircle-scrollbar';
+const SCROLLBAR_STYLE_ID = 'cardshare-scrollbar';
 
 export function installWebChrome() {
   if (Platform.OS !== 'web' || typeof document === 'undefined') return;

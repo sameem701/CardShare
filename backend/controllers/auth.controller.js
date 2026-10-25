@@ -57,7 +57,7 @@ const sendOtp = async (req, res) => {
 
   try {
     await db.query('CALL store_otp($1, $2, $3)', [phone, otp_hash, expires_at]);
-    // await sendWhatsApp(phone, `Your CardCircle OTP is: ${otp}. Valid for 5 minutes.`);
+    // await sendWhatsApp(phone, `Your CardShare OTP is: ${otp}. Valid for 5 minutes.`);
     console.log(`OTP for ${phone}: ${otp}`);
     res.json({ message: 'OTP sent.' });
   } catch (err) {

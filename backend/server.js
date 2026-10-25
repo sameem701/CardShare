@@ -75,5 +75,5 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`CardCircle server running on port ${PORT}`);
+  console.log(`CardShare server running on port ${PORT}`);
 });
