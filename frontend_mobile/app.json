@@ -17,7 +17,12 @@
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_CONTACTS",
+        "android.permission.WRITE_CONTACTS"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -38,6 +43,11 @@
           "contactsPermission": "CardShare uses your contacts to show the name you saved for someone."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "54b24d26-0680-480a-bae6-ee30ed4f6ef6"
+      }
+    }
   }
 }
