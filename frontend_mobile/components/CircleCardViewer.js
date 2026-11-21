@@ -32,7 +32,7 @@ function Chevron({ direction }) {
     <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
       <Path
         d={direction === 'left' ? 'M15 5l-7 7 7 7' : 'M9 5l7 7-7 7'}
-        stroke="rgba(255, 255, 255, 0.72)"
+        stroke={theme.colors.text2}
         strokeWidth="2.2"
         strokeLinecap="round"
         strokeLinejoin="round"

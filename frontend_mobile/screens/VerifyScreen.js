@@ -8,8 +8,8 @@ import theme from '../constants/theme';
 
 const RESEND_SECONDS = 60;
 
-export default function VerifyScreen({ phone, onBack, onVerified }) {
-  const [code, setCode] = useState('');
+export default function VerifyScreen({ phone, devOtp, onBack, onVerified }) {
+  const [code, setCode] = useState(String(devOtp || '').replace(/\D/g, '').slice(0, 6));
   const [error, setError] = useState('');
   const [working, setWorking] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(RESEND_SECONDS);
@@ -17,6 +17,11 @@ export default function VerifyScreen({ phone, onBack, onVerified }) {
   const topInset = useTopInset();
   const [focused, setFocused] = useState(true);
   const inputRef = useRef(null);
+
+  useEffect(() => {
+    const digits = String(devOtp || '').replace(/\D/g, '').slice(0, 6);
+    if (digits) setCode(digits);
+  }, [devOtp]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -64,7 +69,9 @@ export default function VerifyScreen({ phone, onBack, onVerified }) {
     setWorking(true);
     setError('');
     try {
-      await sendOtp(phone);
+      const result = await sendOtp(phone);
+      const next = String(result?.otp || '').replace(/\D/g, '').slice(0, 6);
+      if (next) setCode(next);
       setResendsUsed(1);
       setSecondsLeft(RESEND_SECONDS);
     } catch (err) {
@@ -88,6 +95,7 @@ export default function VerifyScreen({ phone, onBack, onVerified }) {
       </Pressable>
       <Text style={styles.title}>Verify your{'\n'}phone number</Text>
       <Text style={styles.subtitle}>We sent a 6-digit code to {phone}</Text>
+      {code.length === 6 ? <Text style={styles.devHint}>For now the code is filled in: {code}</Text> : null}
       <Pressable style={styles.otpWrap} onPress={() => inputRef.current?.focus()}>
         {digits.map((digit, index) => {
           const isActive = focused && index === activeIndex;
@@ -152,7 +160,14 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.body,
     lineHeight: theme.lineHeight.body,
     color: theme.colors.text2,
-    marginBottom: theme.spacing.xxl,
+    marginBottom: theme.spacing.sm,
+  },
+  devHint: {
+    fontFamily: theme.fonts.body,
+    fontSize: theme.fontSize.body,
+    lineHeight: theme.lineHeight.body,
+    color: theme.colors.text3,
+    marginBottom: theme.spacing.lg,
   },
   otpWrap: {
     flexDirection: 'row',

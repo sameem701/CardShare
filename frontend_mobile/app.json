@@ -4,16 +4,17 @@
     "slug": "cardshare",
     "version": "1.0.0",
     "orientation": "portrait",
+    "scheme": "cardshare",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "dark",
-    "backgroundColor": "#0A0D0F",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#FFFFFF",
     "ios": {
       "supportsTablet": true
     },
     "android": {
       "package": "com.cardshare.app",
       "adaptiveIcon": {
-        "backgroundColor": "#0A0D0F",
+        "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -26,7 +27,7 @@
     },
     "web": {
       "favicon": "./assets/favicon.png",
-      "backgroundColor": "#0A0D0F"
+      "backgroundColor": "#FFFFFF"
     },
     "plugins": [
       "expo-font",

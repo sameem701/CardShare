@@ -45,7 +45,7 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+    backgroundColor: 'rgba(10, 13, 15, 0.18)',
   },
   dotOn: {
     width: 18,

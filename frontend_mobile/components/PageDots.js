@@ -59,7 +59,7 @@ const styles = StyleSheet.create({
     width: DOT,
     height: DOT,
     borderRadius: DOT,
-    backgroundColor: 'rgba(255,255,255,0.16)',
+    backgroundColor: 'rgba(10, 13, 15, 0.16)',
   },
   pill: {
     position: 'absolute',

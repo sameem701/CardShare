@@ -6,6 +6,9 @@
 --
 -- Pending invites for Sara (Circle > Pending): from Ayesha Malik 03004444444, Usman Tariq 03009999999,
 -- Hamza Sheikh 03006666666, Zainab Qureshi 03007777777 and Omar Farooq 03008888888.
+-- Ayesha and Hamza arrived through an invite link (invite_via = link). The others typed a number.
+-- Share codes: Sara invitesara01xxxxxxxxxxxxxxxxxxxx, Ahmed inviteahmed02xxxxxxxxxxxxxxxxxxx,
+-- Bilal invitebilal03xxxxxxxxxxxxxxxxxxx.
 -- Save some of those numbers in the phone's contacts under a name of your choice, then turn on
 -- "Check invites against my contacts" to see them land in "In your contacts".
 -- Sent by Sara (Circle > Sent): Mariam Siddiqui 03001212121 and Talha Javed 03002323232.
@@ -72,20 +75,35 @@
 BEGIN;
 
 -- Start of this Karachi month (m = 0) or last month (m = -1), plus h hours, in ms.
-CREATE FUNCTION pg_temp.seed_ts(m int, h int) RETURNS bigint AS $$
+CREATE OR REPLACE FUNCTION pg_temp.seed_ts(m int, h int) RETURNS bigint AS $$
   SELECT (extract(epoch FROM (
     (date_trunc('month', now() AT TIME ZONE 'Asia/Karachi') + make_interval(months => m, hours => h))
     AT TIME ZONE 'Asia/Karachi'
   )) * 1000)::bigint
 $$ LANGUAGE sql;
 
+-- Phones and the fixed ids this script always writes. Using both means a second
+-- run still finds the helper accounts if a phone was stored in another form.
+DROP TABLE IF EXISTS pg_temp.seed_user_ids;
 CREATE TEMP TABLE seed_user_ids ON COMMIT DROP AS
-SELECT id
+SELECT DISTINCT id
 FROM users
 WHERE phone IN (
   '+923001111111', '+923002222222', '+923003333333',
   '+923004444444', '+923009999999', '+923006666666', '+923007777777', '+923008888888',
   '+923001212121', '+923002323232'
+)
+OR id IN (
+  'aaaaaaaa-0001-4000-8000-000000000001',
+  'aaaaaaaa-0002-4000-8000-000000000002',
+  'aaaaaaaa-0003-4000-8000-000000000003',
+  'aaaaaaaa-0004-4000-8000-000000000004',
+  'aaaaaaaa-0005-4000-8000-000000000005',
+  'aaaaaaaa-0006-4000-8000-000000000006',
+  'aaaaaaaa-0007-4000-8000-000000000007',
+  'aaaaaaaa-0008-4000-8000-000000000008',
+  'aaaaaaaa-0009-4000-8000-000000000009',
+  'aaaaaaaa-0010-4000-8000-000000000010'
 );
 
 DELETE FROM chat_messages
@@ -110,6 +128,9 @@ WHERE requester_id IN (SELECT id FROM seed_user_ids)
 DELETE FROM transactions
 WHERE requester_id IN (SELECT id FROM seed_user_ids)
    OR card_holder_id IN (SELECT id FROM seed_user_ids);
+
+DELETE FROM invite_links
+WHERE user_id IN (SELECT id FROM seed_user_ids);
 
 DELETE FROM circle
 WHERE user_id IN (SELECT id FROM seed_user_ids)
@@ -148,18 +169,18 @@ DELETE FROM users
 WHERE id IN (SELECT id FROM seed_user_ids);
 
 -- Fixed ids so the rows below can refer to each other.
-INSERT INTO users (id, phone, display_name, created_at) VALUES
-  ('aaaaaaaa-0001-4000-8000-000000000001', '+923001111111', 'Sara Khan',     (extract(epoch FROM timestamptz '2026-09-01 09:00:00+05') * 1000)::bigint),
-  ('aaaaaaaa-0002-4000-8000-000000000002', '+923002222222', 'Ahmed Ali',     (extract(epoch FROM timestamptz '2026-09-01 09:05:00+05') * 1000)::bigint),
-  ('aaaaaaaa-0003-4000-8000-000000000003', '+923003333333', 'Bilal Hussain', (extract(epoch FROM timestamptz '2026-09-01 09:10:00+05') * 1000)::bigint),
+INSERT INTO users (id, phone, display_name, city, created_at) VALUES
+  ('aaaaaaaa-0001-4000-8000-000000000001', '+923001111111', 'Sara Khan',        'Karachi', (extract(epoch FROM timestamptz '2026-09-01 09:00:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0002-4000-8000-000000000002', '+923002222222', 'Ahmed Ali',        'Karachi', (extract(epoch FROM timestamptz '2026-09-01 09:05:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0003-4000-8000-000000000003', '+923003333333', 'Bilal Hussain',    'Karachi', (extract(epoch FROM timestamptz '2026-09-01 09:10:00+05') * 1000)::bigint),
   -- Helper accounts. They only exist so Sara has pending invites to receive and send.
-  ('aaaaaaaa-0004-4000-8000-000000000004', '+923004444444', 'Ayesha Malik',    (extract(epoch FROM timestamptz '2026-09-05 10:00:00+05') * 1000)::bigint),
-  ('aaaaaaaa-0005-4000-8000-000000000005', '+923009999999', 'Usman Tariq',     (extract(epoch FROM timestamptz '2026-09-05 10:05:00+05') * 1000)::bigint),
-  ('aaaaaaaa-0006-4000-8000-000000000006', '+923006666666', 'Hamza Sheikh',    (extract(epoch FROM timestamptz '2026-09-05 10:10:00+05') * 1000)::bigint),
-  ('aaaaaaaa-0007-4000-8000-000000000007', '+923007777777', 'Zainab Qureshi',  (extract(epoch FROM timestamptz '2026-09-05 10:15:00+05') * 1000)::bigint),
-  ('aaaaaaaa-0008-4000-8000-000000000008', '+923008888888', 'Omar Farooq',     (extract(epoch FROM timestamptz '2026-09-05 10:20:00+05') * 1000)::bigint),
-  ('aaaaaaaa-0009-4000-8000-000000000009', '+923001212121', 'Mariam Siddiqui', (extract(epoch FROM timestamptz '2026-09-05 10:25:00+05') * 1000)::bigint),
-  ('aaaaaaaa-0010-4000-8000-000000000010', '+923002323232', 'Talha Javed',     (extract(epoch FROM timestamptz '2026-09-05 10:30:00+05') * 1000)::bigint);
+  ('aaaaaaaa-0004-4000-8000-000000000004', '+923004444444', 'Ayesha Malik',     'Karachi', (extract(epoch FROM timestamptz '2026-09-05 10:00:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0005-4000-8000-000000000005', '+923009999999', 'Usman Tariq',      'Karachi', (extract(epoch FROM timestamptz '2026-09-05 10:05:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0006-4000-8000-000000000006', '+923006666666', 'Hamza Sheikh',     'Karachi', (extract(epoch FROM timestamptz '2026-09-05 10:10:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0007-4000-8000-000000000007', '+923007777777', 'Zainab Qureshi',   'Karachi', (extract(epoch FROM timestamptz '2026-09-05 10:15:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0008-4000-8000-000000000008', '+923008888888', 'Omar Farooq',      'Karachi', (extract(epoch FROM timestamptz '2026-09-05 10:20:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0009-4000-8000-000000000009', '+923001212121', 'Mariam Siddiqui',  'Karachi', (extract(epoch FROM timestamptz '2026-09-05 10:25:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0010-4000-8000-000000000010', '+923002323232', 'Talha Javed',      'Karachi', (extract(epoch FROM timestamptz '2026-09-05 10:30:00+05') * 1000)::bigint);
 
 -- Every tier appears once. Each person has a card that is sharing and a card that is not.
 INSERT INTO cards (id, user_id, bank_name, card_tier, allow_sharing, created_at) VALUES
@@ -173,20 +194,25 @@ INSERT INTO cards (id, user_id, bank_name, card_tier, allow_sharing, created_at)
   ('cccccccc-0001-4000-8000-000000000003', 'aaaaaaaa-0001-4000-8000-000000000001', 'Standard Chartered', 'Platinum', 1, (extract(epoch FROM timestamptz '2026-09-04 11:00:00+05') * 1000)::bigint),
   ('cccccccc-0003-4000-8000-000000000003', 'aaaaaaaa-0003-4000-8000-000000000003', 'JS Bank',      'Gold',      1, (extract(epoch FROM timestamptz '2026-09-04 13:00:00+05') * 1000)::bigint);
 
+INSERT INTO invite_links (user_id, code, created_at) VALUES
+  ('aaaaaaaa-0001-4000-8000-000000000001', 'invitesara01xxxxxxxxxxxxxxxxxxxx', (extract(epoch FROM timestamptz '2026-09-01 09:00:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0002-4000-8000-000000000002', 'inviteahmed02xxxxxxxxxxxxxxxxxxx', (extract(epoch FROM timestamptz '2026-09-01 09:05:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0003-4000-8000-000000000003', 'invitebilal03xxxxxxxxxxxxxxxxxxx', (extract(epoch FROM timestamptz '2026-09-01 09:10:00+05') * 1000)::bigint);
+
 -- user_id sent the invite. friend_id received it.
-INSERT INTO circle (user_id, friend_id, c_status, created_at) VALUES
-  ('aaaaaaaa-0001-4000-8000-000000000001', 'aaaaaaaa-0002-4000-8000-000000000002', 'accepted', (extract(epoch FROM timestamptz '2026-09-03 10:00:00+05') * 1000)::bigint),
-  ('aaaaaaaa-0001-4000-8000-000000000001', 'aaaaaaaa-0003-4000-8000-000000000003', 'accepted', (extract(epoch FROM timestamptz '2026-09-03 10:05:00+05') * 1000)::bigint),
-  ('aaaaaaaa-0002-4000-8000-000000000002', 'aaaaaaaa-0003-4000-8000-000000000003', 'accepted', (extract(epoch FROM timestamptz '2026-09-03 10:10:00+05') * 1000)::bigint),
+INSERT INTO circle (user_id, friend_id, c_status, invite_via, created_at) VALUES
+  ('aaaaaaaa-0001-4000-8000-000000000001', 'aaaaaaaa-0002-4000-8000-000000000002', 'accepted', 'app', (extract(epoch FROM timestamptz '2026-09-03 10:00:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0001-4000-8000-000000000001', 'aaaaaaaa-0003-4000-8000-000000000003', 'accepted', 'app', (extract(epoch FROM timestamptz '2026-09-03 10:05:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0002-4000-8000-000000000002', 'aaaaaaaa-0003-4000-8000-000000000003', 'accepted', 'app', (extract(epoch FROM timestamptz '2026-09-03 10:10:00+05') * 1000)::bigint),
   -- Invites Sara has received and not answered (Pending tab).
-  ('aaaaaaaa-0004-4000-8000-000000000004', 'aaaaaaaa-0001-4000-8000-000000000001', 'pending', (extract(epoch FROM timestamptz '2026-10-20 10:00:00+05') * 1000)::bigint),
-  ('aaaaaaaa-0005-4000-8000-000000000005', 'aaaaaaaa-0001-4000-8000-000000000001', 'pending', (extract(epoch FROM timestamptz '2026-10-20 11:00:00+05') * 1000)::bigint),
-  ('aaaaaaaa-0006-4000-8000-000000000006', 'aaaaaaaa-0001-4000-8000-000000000001', 'pending', (extract(epoch FROM timestamptz '2026-10-21 10:00:00+05') * 1000)::bigint),
-  ('aaaaaaaa-0007-4000-8000-000000000007', 'aaaaaaaa-0001-4000-8000-000000000001', 'pending', (extract(epoch FROM timestamptz '2026-10-21 11:00:00+05') * 1000)::bigint),
-  ('aaaaaaaa-0008-4000-8000-000000000008', 'aaaaaaaa-0001-4000-8000-000000000001', 'pending', (extract(epoch FROM timestamptz '2026-10-22 10:00:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0004-4000-8000-000000000004', 'aaaaaaaa-0001-4000-8000-000000000001', 'pending', 'link', (extract(epoch FROM timestamptz '2026-10-20 10:00:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0005-4000-8000-000000000005', 'aaaaaaaa-0001-4000-8000-000000000001', 'pending', 'app', (extract(epoch FROM timestamptz '2026-10-20 11:00:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0006-4000-8000-000000000006', 'aaaaaaaa-0001-4000-8000-000000000001', 'pending', 'link', (extract(epoch FROM timestamptz '2026-10-21 10:00:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0007-4000-8000-000000000007', 'aaaaaaaa-0001-4000-8000-000000000001', 'pending', 'app', (extract(epoch FROM timestamptz '2026-10-21 11:00:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0008-4000-8000-000000000008', 'aaaaaaaa-0001-4000-8000-000000000001', 'pending', 'app', (extract(epoch FROM timestamptz '2026-10-22 10:00:00+05') * 1000)::bigint),
   -- Invites Sara has sent and nobody has answered (Sent tab).
-  ('aaaaaaaa-0001-4000-8000-000000000001', 'aaaaaaaa-0009-4000-8000-000000000009', 'pending', (extract(epoch FROM timestamptz '2026-10-19 10:00:00+05') * 1000)::bigint),
-  ('aaaaaaaa-0001-4000-8000-000000000001', 'aaaaaaaa-0010-4000-8000-000000000010', 'pending', (extract(epoch FROM timestamptz '2026-10-19 11:00:00+05') * 1000)::bigint);
+  ('aaaaaaaa-0001-4000-8000-000000000001', 'aaaaaaaa-0009-4000-8000-000000000009', 'pending', 'app', (extract(epoch FROM timestamptz '2026-10-19 10:00:00+05') * 1000)::bigint),
+  ('aaaaaaaa-0001-4000-8000-000000000001', 'aaaaaaaa-0010-4000-8000-000000000010', 'pending', 'app', (extract(epoch FROM timestamptz '2026-10-19 11:00:00+05') * 1000)::bigint);
 
 INSERT INTO requests (
   id, order_group_id, requester_id, card_holder_id, card_id, merchant, product_url,

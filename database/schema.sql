@@ -9,14 +9,18 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 
 /* ── USERS ──────────────────────────────────────────────────── */
--- Login is phone + OTP. Display name is the only profile field.
--- Onboarding is done when display_name is set. No PIN, device binding, or payout data.
+-- Login is phone + OTP. Display name and city are the profile fields.
+-- Onboarding is done when display_name is set. City is saved on the same screen.
+-- No PIN, device binding, or payout data.
 CREATE TABLE IF NOT EXISTS users (
   id             VARCHAR(36) PRIMARY KEY,
   phone          VARCHAR(20) UNIQUE NOT NULL,
   display_name   VARCHAR(100),
+  city           VARCHAR(100),
   created_at     BIGINT NOT NULL
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS city VARCHAR(100);
 
 /* ── OTPs ───────────────────────────────────────────────────── */
 CREATE TABLE IF NOT EXISTS otps (
@@ -68,12 +72,28 @@ CREATE TABLE IF NOT EXISTS circle (
   sender_contact_name  VARCHAR(100),
   -- Name friend_id uses for user_id. Empty until the invite is accepted.
   friend_contact_name  VARCHAR(100),
+  -- app = typed phone. link = they used this person's invite link. Opening a link never writes a row.
+  invite_via           VARCHAR(10) NOT NULL DEFAULT 'app' CHECK (invite_via IN ('app', 'link')),
   PRIMARY KEY (user_id, friend_id),
   CHECK (user_id <> friend_id)
 );
 
 ALTER TABLE circle ADD COLUMN IF NOT EXISTS sender_contact_name VARCHAR(100);
 ALTER TABLE circle ADD COLUMN IF NOT EXISTS friend_contact_name VARCHAR(100);
+ALTER TABLE circle ADD COLUMN IF NOT EXISTS invite_via VARCHAR(10);
+UPDATE circle SET invite_via = 'app' WHERE invite_via IS NULL;
+ALTER TABLE circle ALTER COLUMN invite_via SET DEFAULT 'app';
+ALTER TABLE circle ALTER COLUMN invite_via SET NOT NULL;
+ALTER TABLE circle DROP CONSTRAINT IF EXISTS circle_invite_via_check;
+ALTER TABLE circle ADD CONSTRAINT circle_invite_via_check CHECK (invite_via IN ('app', 'link'));
+
+-- One reusable share code per person. Opening it does not join a circle.
+CREATE TABLE IF NOT EXISTS invite_links (
+  user_id    VARCHAR(36) PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  code       VARCHAR(32) UNIQUE NOT NULL,
+  created_at BIGINT NOT NULL,
+  CHECK (TRIM(code) <> '')
+);
 
 /* ── REQUESTS ───────────────────────────────────────────────── */
 -- Live order. Deleted when it becomes a transaction.
@@ -291,6 +311,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_thread        ON chat_messages(thread_id);
          → backend calls create_session
          → auth checks the session row with validate_session
          Setup is update_profile. A null display_name means the name is not set.
+         City is saved with the name. It stays null until that call.
    ───────────────────────────────────────────────────────────── */
 
 -- Internal helper — creates user row on first OTP verification
@@ -312,7 +333,7 @@ BEGIN
   RETURN (
     SELECT row_to_json(u)
     FROM (
-      SELECT id, phone, display_name, created_at
+      SELECT id, phone, display_name, city, created_at
       FROM users WHERE id = v_user_id
     ) u
   );
@@ -563,6 +584,7 @@ BEGIN
       'id',           id,
       'phone',        phone,
       'display_name', display_name,
+      'city',         city,
       'created_at',   created_at
     )
     FROM users WHERE id = v_user_id
@@ -575,24 +597,35 @@ $$ LANGUAGE plpgsql;
 /* ─────────────────────────────────────────────────────────────
    PROFILE
    Setup is the display name. A null display_name means it is not set.
+   City is required on the same call as the name.
    ───────────────────────────────────────────────────────────── */
 
--- User sets their display name. A blank name is rejected.
+-- User sets display name and city. A blank name or city is rejected.
+DROP PROCEDURE IF EXISTS update_profile(VARCHAR, VARCHAR);
+
 CREATE OR REPLACE PROCEDURE update_profile(
   p_user_id      VARCHAR(36),
-  p_display_name VARCHAR(100)
+  p_display_name VARCHAR(100),
+  p_city         VARCHAR(100)
 ) AS $$
 DECLARE
   v_name VARCHAR(100);
+  v_city VARCHAR(100);
 BEGIN
   v_name := TRIM(p_display_name);
+  v_city := TRIM(p_city);
 
   IF v_name IS NULL OR v_name = '' THEN
     RAISE EXCEPTION 'Display name is required.';
   END IF;
 
+  IF v_city IS NULL OR v_city = '' THEN
+    RAISE EXCEPTION 'City is required.';
+  END IF;
+
   UPDATE users
-  SET display_name = v_name
+  SET display_name = v_name,
+      city         = v_city
   WHERE id = p_user_id;
 
   IF NOT FOUND THEN
@@ -610,7 +643,7 @@ BEGIN
   RETURN (
     SELECT row_to_json(u)
     FROM (
-      SELECT id, phone, display_name, created_at
+      SELECT id, phone, display_name, city, created_at
       FROM users
       WHERE id = p_user_id
     ) u
@@ -729,13 +762,21 @@ $$ LANGUAGE plpgsql;
 -- Send a circle invite
 -- Blocked if a pending or accepted relationship already exists
 -- Declined invites can be re-sent (old row is deleted before re-inserting)
+-- p_invite_via: app (typed phone) or link (they used this person's invite link)
+DROP PROCEDURE IF EXISTS add_to_circle(VARCHAR, VARCHAR);
+
 CREATE OR REPLACE PROCEDURE add_to_circle(
-  p_user_id   VARCHAR(36),
-  p_friend_id VARCHAR(36)
+  p_user_id     VARCHAR(36),
+  p_friend_id   VARCHAR(36),
+  p_invite_via  VARCHAR(10) DEFAULT 'app'
 ) AS $$
 BEGIN
   IF p_user_id = p_friend_id THEN
     RAISE EXCEPTION 'You cannot add yourself to your circle.';
+  END IF;
+
+  IF p_invite_via IS NULL OR p_invite_via NOT IN ('app', 'link') THEN
+    RAISE EXCEPTION 'Invite must be app or link.';
   END IF;
 
   IF EXISTS (
@@ -753,8 +794,8 @@ BEGIN
   WHERE (user_id = p_user_id AND friend_id = p_friend_id)
   OR (user_id = p_friend_id AND friend_id = p_user_id);
 
-  INSERT INTO circle (user_id, friend_id, c_status, created_at)
-  VALUES (p_user_id, p_friend_id, 'pending', extract(epoch from now()) * 1000);
+  INSERT INTO circle (user_id, friend_id, c_status, invite_via, created_at)
+  VALUES (p_user_id, p_friend_id, 'pending', p_invite_via, extract(epoch from now()) * 1000);
 END;
 $$ LANGUAGE plpgsql;
 
@@ -904,17 +945,156 @@ BEGIN
     SELECT COALESCE(json_agg(c), '[]'::json)
     FROM (
       SELECT u.id, u.display_name, u.phone, ci.c_status, TRUE AS is_sender,
-             ci.sender_contact_name AS contact_name
+             ci.sender_contact_name AS contact_name, ci.invite_via
       FROM circle ci
       JOIN users u ON u.id = ci.friend_id
       WHERE ci.user_id = p_user_id
       UNION
       SELECT u.id, u.display_name, u.phone, ci.c_status, FALSE AS is_sender,
-             ci.friend_contact_name AS contact_name
+             ci.friend_contact_name AS contact_name, ci.invite_via
       FROM circle ci
       JOIN users u ON u.id = ci.user_id
       WHERE ci.friend_id = p_user_id
     ) c
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- One reusable code per person. Opening it never writes a circle row.
+CREATE OR REPLACE FUNCTION get_or_create_invite_link(
+  p_user_id VARCHAR(36)
+) RETURNS JSON AS $$
+DECLARE
+  v_code VARCHAR(32);
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id = p_user_id) THEN
+    RAISE EXCEPTION 'User not found.';
+  END IF;
+
+  SELECT code INTO v_code FROM invite_links WHERE user_id = p_user_id;
+  IF FOUND THEN
+    RETURN json_build_object('code', v_code);
+  END IF;
+
+  v_code := replace(uuid_generate_v4()::text, '-', '');
+  INSERT INTO invite_links (user_id, code, created_at)
+  VALUES (p_user_id, v_code, extract(epoch from now()) * 1000);
+
+  RETURN json_build_object('code', v_code);
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Public. Name only. Null if the code is unknown or the inviter has no name yet.
+CREATE OR REPLACE FUNCTION lookup_invite_link(
+  p_code VARCHAR(32)
+) RETURNS JSON AS $$
+DECLARE
+  v_code VARCHAR(32);
+  v_name VARCHAR(100);
+BEGIN
+  v_code := NULLIF(TRIM(p_code), '');
+  IF v_code IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT u.display_name INTO v_name
+  FROM invite_links l
+  JOIN users u ON u.id = l.user_id
+  WHERE l.code = v_code
+    AND u.display_name IS NOT NULL
+    AND TRIM(u.display_name) <> '';
+
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN json_build_object('display_name', v_name);
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Logged-in. The link still does not insert a circle row.
+-- status: invalid, self, already_member, already_sent, already_received, can_send
+CREATE OR REPLACE FUNCTION resolve_invite_link(
+  p_viewer_id VARCHAR(36),
+  p_code      VARCHAR(32)
+) RETURNS JSON AS $$
+DECLARE
+  v_code         VARCHAR(32);
+  v_inviter_id   VARCHAR(36);
+  v_display_name VARCHAR(100);
+  v_status       VARCHAR(20);
+BEGIN
+  v_code := NULLIF(TRIM(p_code), '');
+  IF v_code IS NULL THEN
+    RETURN json_build_object('status', 'invalid');
+  END IF;
+
+  SELECT l.user_id, u.display_name
+  INTO v_inviter_id, v_display_name
+  FROM invite_links l
+  JOIN users u ON u.id = l.user_id
+  WHERE l.code = v_code
+    AND u.display_name IS NOT NULL
+    AND TRIM(u.display_name) <> '';
+
+  IF NOT FOUND THEN
+    RETURN json_build_object('status', 'invalid');
+  END IF;
+
+  IF v_inviter_id = p_viewer_id THEN
+    RETURN json_build_object('status', 'self');
+  END IF;
+
+  SELECT c_status INTO v_status
+  FROM circle
+  WHERE (
+    (user_id = p_viewer_id AND friend_id = v_inviter_id)
+    OR (user_id = v_inviter_id AND friend_id = p_viewer_id)
+  )
+  AND c_status IN ('pending', 'accepted')
+  LIMIT 1;
+
+  IF v_status = 'accepted' THEN
+    RETURN json_build_object(
+      'status', 'already_member',
+      'inviter_id', v_inviter_id,
+      'display_name', v_display_name
+    );
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM circle
+    WHERE user_id = p_viewer_id
+      AND friend_id = v_inviter_id
+      AND c_status = 'pending'
+  ) THEN
+    RETURN json_build_object(
+      'status', 'already_sent',
+      'inviter_id', v_inviter_id,
+      'display_name', v_display_name
+    );
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM circle
+    WHERE user_id = v_inviter_id
+      AND friend_id = p_viewer_id
+      AND c_status = 'pending'
+  ) THEN
+    RETURN json_build_object(
+      'status', 'already_received',
+      'inviter_id', v_inviter_id,
+      'display_name', v_display_name
+    );
+  END IF;
+
+  RETURN json_build_object(
+    'status', 'can_send',
+    'inviter_id', v_inviter_id,
+    'display_name', v_display_name
   );
 END;
 $$ LANGUAGE plpgsql;

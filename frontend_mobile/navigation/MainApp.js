@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { BackHandler, Platform, View } from 'react-native';
 import { DefaultTheme, NavigationContainer, useNavigation, useNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -22,6 +22,10 @@ import theme from '../constants/theme';
 import { RoleModeProvider } from '../context/RoleMode';
 import { AppActionsProvider } from './AppActions';
 import { screenId } from './openScreen';
+import { useSession } from '../context/SessionContext';
+import { useToast } from '../context/ToastContext';
+import { clearPendingInviteCode, usePendingInviteCode } from '../utils/inviteHold';
+import { applyInviteResolution, resolveAndApply } from '../utils/inviteLink';
 
 const navigationTheme = {
   ...DefaultTheme,
@@ -82,10 +86,40 @@ function GuideScreen() {
   );
 }
 
-function MainAppShell({ onLoggedOut }) {
+function InviteFollowThrough({ navigationRef, ready, handoff, onHandoffDone }) {
+  const { sessionId, user } = useSession();
+  const showToast = useToast();
+  const pending = usePendingInviteCode();
+  const usedHandoff = useRef(false);
+  const usedCode = useRef(null);
+
+  useEffect(() => {
+    if (!ready) return;
+    if (!sessionId || !user?.id) return;
+
+    if (handoff && !usedHandoff.current) {
+      usedHandoff.current = true;
+      applyInviteResolution(navigationRef, showToast, handoff);
+      onHandoffDone?.();
+      return;
+    }
+
+    if (!pending || usedCode.current === pending) return;
+    usedCode.current = pending;
+    resolveAndApply(sessionId, user.id, pending, navigationRef, showToast).catch((err) => {
+      showToast(err.message);
+      clearPendingInviteCode();
+    });
+  }, [handoff, navigationRef, onHandoffDone, pending, ready, sessionId, showToast, user?.id]);
+
+  return null;
+}
+
+function MainAppShell({ onLoggedOut, inviteHandoff, onInviteHandoffDone }) {
   const navigationRef = useNavigationContainerRef();
   const [menuOpen, setMenuOpen] = useState(false);
   const [tabsFocused, setTabsFocused] = useState(true);
+  const [navReady, setNavReady] = useState(false);
 
   const syncTabs = () => {
     const name = navigationRef.getCurrentRoute()?.name;
@@ -106,7 +140,15 @@ function MainAppShell({ onLoggedOut }) {
     <RoleModeProvider>
     <AppActionsProvider value={{ openMenu: () => setMenuOpen(true), onLoggedOut }}>
       <View style={{ flex: 1 }}>
-        <NavigationContainer ref={navigationRef} theme={navigationTheme} onReady={syncTabs} onStateChange={syncTabs}>
+        <NavigationContainer
+          ref={navigationRef}
+          theme={navigationTheme}
+          onReady={() => {
+            syncTabs();
+            setNavReady(true);
+          }}
+          onStateChange={syncTabs}
+        >
           <Stack.Navigator screenOptions={stackOptions}>
             <Stack.Screen name="Tabs" component={MainTabs} />
             <Stack.Screen name="add-card" component={AddCardScreen} getId={screenId} />
@@ -122,6 +164,12 @@ function MainAppShell({ onLoggedOut }) {
             <Stack.Screen name="guide" component={GuideScreen} getId={screenId} />
           </Stack.Navigator>
         </NavigationContainer>
+        <InviteFollowThrough
+          navigationRef={navigationRef}
+          ready={navReady}
+          handoff={inviteHandoff}
+          onHandoffDone={onInviteHandoffDone}
+        />
         <SideMenu
           visible={menuOpen && tabsFocused}
           onClose={() => setMenuOpen(false)}
@@ -149,6 +197,12 @@ function MainAppShell({ onLoggedOut }) {
   );
 }
 
-export default function MainApp({ onLoggedOut }) {
-  return <MainAppShell onLoggedOut={onLoggedOut} />;
+export default function MainApp({ onLoggedOut, inviteHandoff, onInviteHandoffDone }) {
+  return (
+    <MainAppShell
+      onLoggedOut={onLoggedOut}
+      inviteHandoff={inviteHandoff}
+      onInviteHandoffDone={onInviteHandoffDone}
+    />
+  );
 }

@@ -6,15 +6,17 @@ import { updateProfile } from '../api/onboarding';
 import { useTopInset } from '../hooks/useTopInset';
 import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
-import { buildDisplayName } from '../utils/initials';
+import { buildDisplayName, splitDisplayName } from '../utils/initials';
 
 const MAX_FIRST = 50;
 const MAX_LAST = 49;
 
 export default function NameScreen({ onBack, onSaved }) {
   const { sessionId, user, updateUser } = useSession();
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
+  const seeded = splitDisplayName(user?.display_name);
+  const [firstName, setFirstName] = useState(seeded.first);
+  const [lastName, setLastName] = useState(seeded.last);
+  const [city, setCity] = useState(String(user?.city || '').trim());
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const topInset = useTopInset();
@@ -49,12 +51,21 @@ export default function NameScreen({ onBack, onSaved }) {
       setError('Combined name must be 100 characters or less.');
       return;
     }
+    const cityValue = city.trim();
+    if (!cityValue) {
+      setError('City is required.');
+      return;
+    }
+    if (cityValue.length > 100) {
+      setError('City must be 100 characters or less.');
+      return;
+    }
 
     setSaving(true);
     setError('');
     try {
-      await updateProfile(sessionId, user.id, displayName);
-      await updateUser({ display_name: displayName });
+      await updateProfile(sessionId, user.id, displayName, cityValue);
+      await updateUser({ display_name: displayName, city: cityValue });
       onSaved?.(displayName);
     } catch (err) {
       setError(err.message);
@@ -70,7 +81,7 @@ export default function NameScreen({ onBack, onSaved }) {
       </Pressable>
       <Text style={styles.title}>What should{'\n'}we call you?</Text>
       <Text style={styles.subtitle}>
-        First and last name — this is what people in your circle see on your cards.
+        Your name and city. People in your circle see your name on your cards.
       </Text>
       <Text style={styles.label}>First name</Text>
       <TextField
@@ -89,6 +100,23 @@ export default function NameScreen({ onBack, onSaved }) {
         autoComplete="family-name"
         style={styles.input}
         maxLength={MAX_LAST}
+      />
+      <Text style={styles.label}>City</Text>
+      <TextField
+        value={city}
+        onChangeText={(value) => {
+          if (value.length > 100) {
+            setError('City must be 100 characters or less.');
+            setCity(value.slice(0, 100));
+            return;
+          }
+          setError('');
+          setCity(value);
+        }}
+        placeholder="Karachi"
+        autoComplete="address-level2"
+        style={styles.input}
+        maxLength={100}
       />
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <Pressable

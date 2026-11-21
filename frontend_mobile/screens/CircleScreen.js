@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Alert, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { useIsFocused, useNavigation, useRoute } from '@react-navigation/native';
-import { cancelCircleInvite, getCircle, respondToCircleInvite, removeFromCircle } from '../api/circle';
+import { cancelCircleInvite, getCircle, getInviteLink, respondToCircleInvite, removeFromCircle } from '../api/circle';
 import ConfirmDialog from '../components/ConfirmDialog';
 import EmptyState from '../components/EmptyState';
 import ErrorBanner from '../components/ErrorBanner';
@@ -20,6 +20,7 @@ import { openScreen } from '../navigation/openScreen';
 import { queryClient } from '../queries/client';
 import { useScreenQuery } from '../queries/useScreenQuery';
 import { asList } from '../utils/format';
+import { shareInviteLink } from '../utils/inviteLink';
 import { normalizePhone } from '../utils/phone';
 
 const FILTERS = [['circle', 'Circle'], ['pending', 'Pending'], ['sent', 'Sent']];
@@ -55,6 +56,12 @@ function accountName(member) {
   return member.contact_name || member.display_name || 'Unknown';
 }
 
+function rowSubtitle(member) {
+  const phone = member.phone || '';
+  if (member.invite_via === 'link') return phone ? `${phone} · via link` : 'via link';
+  return phone;
+}
+
 export default function CircleScreen() {
   const navigation = useNavigation();
   const route = useRoute();
@@ -65,6 +72,7 @@ export default function CircleScreen() {
   const [confirm, setConfirm] = useState(null);
   const [actionError, setActionError] = useState('');
   const [filter, setFilter] = useState('circle');
+  const [sharing, setSharing] = useState(false);
 
   useEffect(() => {
     const wanted = route.params?.filter;
@@ -151,6 +159,19 @@ export default function CircleScreen() {
     }
   };
 
+  const shareLink = async () => {
+    setSharing(true);
+    setActionError('');
+    try {
+      const result = await getInviteLink(sessionId, user.id);
+      await shareInviteLink(user.display_name, result.code);
+    } catch (err) {
+      setActionError(err.message);
+    } finally {
+      setSharing(false);
+    }
+  };
+
   const toggleContacts = async () => {
     const outcome = await contacts.toggle();
     if (outcome === 'blocked') {
@@ -172,7 +193,7 @@ export default function CircleScreen() {
     <ListCard
       key={member.id}
       title={name}
-      subtitle={member.phone || ''}
+      subtitle={rowSubtitle(member)}
       action={(
         <View style={styles.rowActions}>
           <Pressable
@@ -224,7 +245,7 @@ export default function CircleScreen() {
           <ListCard
             key={member.id}
             title={name}
-            subtitle={member.phone || ''}
+            subtitle={rowSubtitle(member)}
             action={(
               <Pressable
                 style={styles.bin}
@@ -289,7 +310,7 @@ export default function CircleScreen() {
         <ListCard
           key={member.id}
           title={accountName(member)}
-          subtitle={member.phone || ''}
+          subtitle={rowSubtitle(member)}
           badgeLabel="Sent"
           badgeVariant="amber"
           action={(
@@ -351,6 +372,17 @@ export default function CircleScreen() {
           );
         })}
       </View>
+      <View style={styles.pad}>
+        <Pressable
+          onPress={shareLink}
+          disabled={sharing}
+          style={styles.shareBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Share invite link"
+        >
+          <Text style={styles.shareText}>{sharing ? 'Preparing…' : 'Share invite link'}</Text>
+        </Pressable>
+      </View>
       {body}
       <View style={styles.pad}>
         <ErrorBanner message={error} onRetry={() => circle.refetch()} />
@@ -372,6 +404,15 @@ export default function CircleScreen() {
 const styles = StyleSheet.create({
   pad: {
     paddingHorizontal: theme.layout.screenPadding,
+  },
+  shareBtn: {
+    alignSelf: 'flex-start',
+    marginBottom: theme.spacing.lg,
+  },
+  shareText: {
+    fontFamily: theme.fonts.bodyMedium,
+    fontSize: theme.fontSize.body,
+    color: theme.colors.green,
   },
   rowActions: {
     flexDirection: 'row',

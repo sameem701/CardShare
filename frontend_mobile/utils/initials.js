@@ -13,6 +13,16 @@ export function formatDisplayName(name) {
   return parts.map(titleCaseWord).join(' ');
 }
 
+export function splitDisplayName(name) {
+  const parts = String(name || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!parts.length) return { first: '', last: '' };
+  if (parts.length === 1) return { first: parts[0], last: '' };
+  return { first: parts[0], last: parts.slice(1).join(' ') };
+}
+
 export function buildDisplayName(firstName, lastName) {
   const first = String(firstName || '').trim();
   const last = String(lastName || '').trim();

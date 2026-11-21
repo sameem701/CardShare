@@ -4,13 +4,29 @@ export function getCircle(sessionId, userId, options = {}) {
   return apiRequest('/api/circle', { sessionId, userId, signal: options.signal });
 }
 
-export function sendCircleInvite(sessionId, userId, friendId, contactName) {
+export function sendCircleInvite(sessionId, userId, friendId, contactName, inviteVia = 'app') {
+  const body = { friend_id: friendId, invite_via: inviteVia === 'link' ? 'link' : 'app' };
+  if (contactName) body.contact_name = contactName;
   return apiRequest('/api/circle/invite', {
     method: 'POST',
-    body: contactName ? { friend_id: friendId, contact_name: contactName } : { friend_id: friendId },
+    body,
     sessionId,
     userId,
   });
+}
+
+export function getInviteLink(sessionId, userId) {
+  return apiRequest('/api/circle/invite-link', { sessionId, userId });
+}
+
+export function lookupInviteLink(code) {
+  const params = new URLSearchParams({ code: String(code || '').trim() });
+  return apiRequest(`/api/circle/invite-link/lookup?${params}`);
+}
+
+export function resolveInviteLink(sessionId, userId, code) {
+  const params = new URLSearchParams({ code: String(code || '').trim() });
+  return apiRequest(`/api/circle/invite-link/resolve?${params}`, { sessionId, userId });
 }
 
 export function cancelCircleInvite(sessionId, userId, friendId) {

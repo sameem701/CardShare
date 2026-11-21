@@ -5,6 +5,7 @@ function targetKey(params = {}) {
   if (params.cardId) return `card:${params.cardId}`;
   if (params.txnId) return `txn:${params.txnId}:${params.role || ''}`;
   if (params.role) return `role:${params.role}`;
+  if (params.inviterId) return `invite:${params.inviterId}`;
   return 'one';
 }
 
@@ -52,8 +53,9 @@ export function openRequests(navigation) {
 
 export function openCircle(navigation, options = {}) {
   const stack = findStack(navigation);
+  const filter = options.filter || (options.pending ? 'pending' : 'circle');
   stack.navigate('circle', {
-    filter: options.pending ? 'pending' : 'circle',
+    filter,
     at: Date.now(),
   });
 }

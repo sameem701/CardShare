@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -18,9 +18,19 @@ import HowItWorksScreen from './screens/HowItWorksScreen';
 import PhoneScreen from './screens/PhoneScreen';
 import VerifyScreen from './screens/VerifyScreen';
 import NameScreen from './screens/NameScreen';
+import InviteLandingScreen from './screens/InviteLandingScreen';
+import InviteAttachScreen from './screens/InviteAttachScreen';
 import { installWebChrome } from './utils/webChrome';
+import { clearPendingInviteCode, getPendingInviteCode, usePendingInviteCode } from './utils/inviteHold';
+import { listenForInviteLinks } from './utils/inviteLink';
 
-const hasDisplayName = (user) => Boolean(user?.display_name && String(user.display_name).trim());
+const hasFinishedSetup = (user) =>
+  Boolean(
+    user?.display_name &&
+      String(user.display_name).trim() &&
+      user?.city &&
+      String(user.city).trim()
+  );
 
 function AuthGate() {
   const { session, booting, signIn, signOut } = useSession();
@@ -28,25 +38,73 @@ function AuthGate() {
   const [phoneBack, setPhoneBack] = useState('start');
   const [howStep, setHowStep] = useState(0);
   const [phone, setPhone] = useState('');
+  const [devOtp, setDevOtp] = useState('');
+  const [awaitingAttach, setAwaitingAttach] = useState(false);
+  const [inviteHandoff, setInviteHandoff] = useState(null);
+  const pendingInvite = usePendingInviteCode();
+  const startedWithoutName = useRef(false);
 
-  const onRequireLogin = useCallback(() => {
-    setAuthScreen('start');
+  useEffect(() => {
+    let stop;
+    listenForInviteLinks().then((unsub) => {
+      stop = unsub;
+    });
+    return () => stop?.();
+  }, []);
+
+  useEffect(() => {
+    if (session || !pendingInvite) return;
+    if (authScreen === 'start') setAuthScreen('invitee');
+  }, [authScreen, pendingInvite, session]);
+
+  const onHandoffInvite = useCallback((result) => {
+    setAwaitingAttach(false);
+    setInviteHandoff(result);
+  }, []);
+
+  const onAttachFinished = useCallback(() => {
+    setAwaitingAttach(false);
   }, []);
 
   if (booting) {
     return <LoadingState message="Starting…" />;
   }
 
-  if (session && hasDisplayName(session.user)) {
-    return <MainApp onLoggedOut={() => setAuthScreen('start')} />;
+  if (session && hasFinishedSetup(session.user)) {
+    if (awaitingAttach && pendingInvite) {
+      return (
+        <InviteAttachScreen
+          code={pendingInvite}
+          onResolved={onHandoffInvite}
+          onFinished={onAttachFinished}
+        />
+      );
+    }
+    return (
+      <MainApp
+        onLoggedOut={() => {
+          setAwaitingAttach(false);
+          startedWithoutName.current = false;
+          setAuthScreen('start');
+        }}
+        inviteHandoff={inviteHandoff}
+        onInviteHandoffDone={() => setInviteHandoff(null)}
+      />
+    );
   }
 
-  if (session && !hasDisplayName(session.user)) {
+  if (session && !hasFinishedSetup(session.user)) {
+    if (!startedWithoutName.current) {
+      startedWithoutName.current = !String(session.user?.display_name || '').trim();
+    }
     return (
       <NameScreen
         onBack={() => {
           setAuthScreen('start');
           signOut();
+        }}
+        onSaved={() => {
+          if (startedWithoutName.current && getPendingInviteCode()) setAwaitingAttach(true);
         }}
       />
     );
@@ -57,7 +115,7 @@ function AuthGate() {
       <HowItWorksScreen
         step={howStep}
         onStep={setHowStep}
-        onBack={() => setAuthScreen('start')}
+        onBack={() => setAuthScreen(phoneBack === 'invitee' ? 'invitee' : 'start')}
         onContinue={() => {
           setPhoneBack('how');
           setAuthScreen('phone');
@@ -69,9 +127,10 @@ function AuthGate() {
   if (authScreen === 'phone') {
     return (
       <PhoneScreen
-        onBack={() => setAuthScreen(phoneBack)}
-        onSent={(value) => {
+        onBack={() => setAuthScreen(phoneBack || 'start')}
+        onSent={(value, otp) => {
           setPhone(value);
+          setDevOtp(otp || '');
           setAuthScreen('verify');
         }}
       />
@@ -82,9 +141,31 @@ function AuthGate() {
     return (
       <VerifyScreen
         phone={phone}
+        devOtp={devOtp}
         onBack={() => setAuthScreen('phone')}
         onVerified={(result) => {
           signIn(result);
+        }}
+      />
+    );
+  }
+
+  if (authScreen === 'invitee' && pendingInvite) {
+    return (
+      <InviteLandingScreen
+        code={pendingInvite}
+        onGetStarted={() => {
+          setHowStep(0);
+          setPhoneBack('invitee');
+          setAuthScreen('how');
+        }}
+        onExistingAccount={() => {
+          setPhoneBack('invitee');
+          setAuthScreen('phone');
+        }}
+        onNotNow={() => {
+          clearPendingInviteCode();
+          setAuthScreen('start');
         }}
       />
     );
@@ -134,7 +215,7 @@ export default function App() {
           </ToastProvider>
         </QueryClientProvider>
         </View>
-        <StatusBar style="light" />
+        <StatusBar style="dark" />
       </View>
     </SafeAreaProvider>
   );

@@ -134,7 +134,10 @@ export default function SideMenu({ visible, onClose, onCircle, onCards, onHistor
               <View style={styles.avatar}>
                 <MenuIcon name="profile" color={theme.colors.green} size={23} />
               </View>
-              <Text style={styles.name} numberOfLines={1}>{formatDisplayName(user?.display_name) || 'Account'}</Text>
+              <View style={styles.whoText}>
+                <Text style={styles.name} numberOfLines={1}>{formatDisplayName(user?.display_name) || 'Account'}</Text>
+                {user?.city ? <Text style={styles.city} numberOfLines={1}>{user.city}</Text> : null}
+              </View>
               <Pressable
                 onPress={onClose}
                 style={styles.close}
@@ -235,12 +238,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.border2,
   },
-  name: {
+  whoText: {
     flex: 1,
     minWidth: 0,
+  },
+  name: {
     fontFamily: theme.fonts.display,
     fontSize: 20,
     color: theme.colors.text,
+  },
+  city: {
+    marginTop: 2,
+    fontFamily: theme.fonts.body,
+    fontSize: theme.fontSize.small,
+    color: theme.colors.text3,
   },
   close: {
     width: 38,

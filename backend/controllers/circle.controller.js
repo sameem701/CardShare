@@ -36,9 +36,17 @@ const sendInvite = async (req, res) => {
     return res.status(400).json({ error: 'You cannot invite yourself.' });
   }
 
+  const invite_via = req.body?.invite_via == null || String(req.body.invite_via).trim() === ''
+    ? 'app'
+    : String(req.body.invite_via).trim();
+
+  if (invite_via !== 'app' && invite_via !== 'link') {
+    return res.status(400).json({ error: 'invite_via must be app or link.' });
+  }
+
   try {
     const contactName = storedContactName(req.body?.contact_name);
-    await db.query('CALL add_to_circle($1, $2)', [user_id, friend_id]);
+    await db.query('CALL add_to_circle($1, $2, $3)', [user_id, friend_id, invite_via]);
     await saveContactName(user_id, friend_id, contactName);
     res.status(201).json({ message: 'Circle invite sent.' });
   } catch (err) {
@@ -208,6 +216,58 @@ const removeFromCircle = async (req, res) => {
   }
 };
 
+// GET /api/circle/invite-link
+const getInviteLink = async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      'SELECT get_or_create_invite_link($1) AS result',
+      [req.user.id]
+    );
+    res.json(rows[0].result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
+// GET /api/circle/invite-link/lookup?code=
+const lookupInviteLink = async (req, res) => {
+  const code = String(req.query.code || '').trim();
+  if (!code) {
+    return res.status(400).json({ error: 'code is required.' });
+  }
+
+  try {
+    const { rows } = await db.query(
+      'SELECT lookup_invite_link($1) AS result',
+      [code]
+    );
+    if (!rows[0].result) {
+      return res.status(404).json({ error: 'Invite not found.' });
+    }
+    res.json(rows[0].result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
+// GET /api/circle/invite-link/resolve?code=
+const resolveInviteLink = async (req, res) => {
+  const code = String(req.query.code || '').trim();
+  if (!code) {
+    return res.status(400).json({ error: 'code is required.' });
+  }
+
+  try {
+    const { rows } = await db.query(
+      'SELECT resolve_invite_link($1, $2) AS result',
+      [req.user.id, code]
+    );
+    res.json(rows[0].result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
 module.exports = {
   sendInvite,
   respondToInvite,
@@ -217,4 +277,7 @@ module.exports = {
   getCardHolders,
   getCircleCards,
   removeFromCircle,
+  getInviteLink,
+  lookupInviteLink,
+  resolveInviteLink,
 };

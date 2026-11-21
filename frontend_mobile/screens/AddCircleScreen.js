@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import TextField from '../components/TextField';
 import { sendCircleInvite } from '../api/circle';
 import { findUserByPhone } from '../api/profile';
@@ -14,10 +14,14 @@ import { useSession } from '../context/SessionContext';
 import { useToast } from '../context/ToastContext';
 import { queryClient } from '../queries/client';
 import { pickContact } from '../utils/deviceContacts';
+import { firstNameOf } from '../utils/inviteLink';
 import { normalizePhone } from '../utils/phone';
 
 export default function AddCircleScreen() {
   const navigation = useNavigation();
+  const route = useRoute();
+  const fromLink = route.params?.inviteVia === 'link' && route.params?.inviterId;
+  const inviterName = route.params?.inviterName || '';
   const { sessionId, user } = useSession();
   const showToast = useToast();
   const [phone, setPhone] = useState('');
@@ -61,18 +65,22 @@ export default function AddCircleScreen() {
   };
 
   const submit = async () => {
-    const trimmed = normalizePhone(phone);
-    const digitCount = trimmed.replace(/\D/g, '').length;
-    if (!trimmed || digitCount < 10) {
-      setError('Enter a full phone number.');
-      return;
-    }
-
     setLoading(true);
     setError('');
     try {
-      const found = await findUserByPhone(sessionId, user.id, trimmed);
-      await sendCircleInvite(sessionId, user.id, found.id, contactName);
+      if (fromLink) {
+        await sendCircleInvite(sessionId, user.id, route.params.inviterId, null, 'link');
+      } else {
+        const trimmed = normalizePhone(phone);
+        const digitCount = trimmed.replace(/\D/g, '').length;
+        if (!trimmed || digitCount < 10) {
+          setError('Enter a full phone number.');
+          setLoading(false);
+          return;
+        }
+        const found = await findUserByPhone(sessionId, user.id, trimmed);
+        await sendCircleInvite(sessionId, user.id, found.id, contactName, 'app');
+      }
       showToast('Invite sent');
       await queryClient.invalidateQueries({ queryKey: ['circle', user.id] });
       await queryClient.invalidateQueries({ queryKey: ['circle-cards', user.id] });
@@ -88,19 +96,27 @@ export default function AddCircleScreen() {
     <ScreenShell>
       <TopBar title="Add to circle" onBack={() => navigation.goBack()} />
       <View style={styles.scroll}>
-        <Text style={styles.subtitle}>Find them by the phone number they use on CardShare. A contact name is shown only to you.</Text>
-        <View style={styles.choose}>
-          <SecondaryButton label="Choose from contacts" onPress={chooseContact} disabled={loading} />
-        </View>
-        {contactName ? <Text style={styles.picked}>Saved as {contactName}</Text> : null}
-        <TextField
-          value={phone}
-          onChangeText={onChangePhone}
-          placeholder="+92 3xx xxxxxxx"
-          keyboardType="phone-pad"
-          style={styles.input}
-          maxLength={20}
-        />
+        {fromLink ? (
+          <Text style={styles.subtitle}>
+            {firstNameOf(inviterName)} invited you. Send a request to join their circle. They will see it on Pending.
+          </Text>
+        ) : (
+          <>
+            <Text style={styles.subtitle}>Find them by the phone number they use on CardShare. A contact name is shown only to you.</Text>
+            <View style={styles.choose}>
+              <SecondaryButton label="Choose from contacts" onPress={chooseContact} disabled={loading} />
+            </View>
+            {contactName ? <Text style={styles.picked}>Saved as {contactName}</Text> : null}
+            <TextField
+              value={phone}
+              onChangeText={onChangePhone}
+              placeholder="+92 3xx xxxxxxx"
+              keyboardType="phone-pad"
+              style={styles.input}
+              maxLength={20}
+            />
+          </>
+        )}
         <ErrorBanner message={error} />
         <PrimaryButton label="Send invite" loading={loading} onPress={submit} />
       </View>

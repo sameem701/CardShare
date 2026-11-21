@@ -59,7 +59,7 @@ const sendOtp = async (req, res) => {
     await db.query('CALL store_otp($1, $2, $3)', [phone, otp_hash, expires_at]);
     // await sendWhatsApp(phone, `Your CardShare OTP is: ${otp}. Valid for 5 minutes.`);
     console.log(`OTP for ${phone}: ${otp}`);
-    res.json({ message: 'OTP sent.' });
+    res.json({ message: 'OTP sent.', otp });
   } catch (err) {
     const mapped = mapAuthLockoutError(err, res);
     if (mapped) return mapped;
@@ -91,6 +91,7 @@ const verifyOtp = async (req, res) => {
         id: user.id,
         phone: user.phone,
         display_name: user.display_name,
+        city: user.city,
         created_at: user.created_at,
       },
     });

@@ -46,8 +46,8 @@ export default function PhoneScreen({ onBack, onSent }) {
     setSending(true);
     setError('');
     try {
-      await sendOtp(trimmed);
-      onSent(trimmed);
+      const result = await sendOtp(trimmed);
+      onSent(trimmed, result?.otp);
     } catch (err) {
       setError(err.message);
       if (err.status === 429 && err.payload?.code === 'OTP_COOLDOWN') {
