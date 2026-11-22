@@ -1,5 +1,4 @@
 const db = require('../config/db');
-const { ALLOWED_BANKS, ALLOWED_CARD_TIERS } = require('./cards.controller');
 
 const ALLOWED_INVITE_RESPONSES = ['accepted', 'declined'];
 
@@ -125,15 +124,11 @@ const getCardHolders = async (req, res) => {
   const bank = String(req.query.bank || '').trim();
   const tier = String(req.query.tier || '').trim();
 
-  if (!ALLOWED_BANKS.includes(bank)) {
-    return res.status(400).json({
-      error: `Invalid bank_name. Allowed: ${ALLOWED_BANKS.join(', ')}.`,
-    });
+  if (!bank) {
+    return res.status(400).json({ error: 'bank is required.' });
   }
-  if (!ALLOWED_CARD_TIERS.includes(tier)) {
-    return res.status(400).json({
-      error: `Invalid card_tier. Allowed: ${ALLOWED_CARD_TIERS.join(', ')}.`,
-    });
+  if (!tier) {
+    return res.status(400).json({ error: 'tier is required.' });
   }
 
   try {

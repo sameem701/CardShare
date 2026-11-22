@@ -3,11 +3,22 @@ import theme from '../constants/theme';
 import SharingSwitch from './SharingSwitch';
 
 // The switch at the top of the Pending tab.
-export function ContactCheckRow({ enabled, blocked, unavailable, onPress }) {
-  let note = 'Off. New invites stay unchecked.';
-  if (enabled) note = 'On. New invites are checked when this page opens.';
-  else if (unavailable) note = 'Not available on this device.';
-  else if (blocked) note = 'Off. Allow Contacts in your phone Settings to turn this on.';
+export function ContactCheckRow({
+  enabled,
+  blocked,
+  unavailable,
+  onPress,
+  title = 'Check invites against my contacts',
+  note,
+  accessibilityLabel,
+}) {
+  let detail = note;
+  if (!detail) {
+    detail = 'Off. New invites stay unchecked.';
+    if (enabled) detail = 'On. New invites are checked when this page opens.';
+    else if (unavailable) detail = 'Not available on this device.';
+    else if (blocked) detail = 'Off. Allow Contacts in your phone Settings to turn this on.';
+  }
 
   return (
     <Pressable
@@ -16,11 +27,11 @@ export function ContactCheckRow({ enabled, blocked, unavailable, onPress }) {
       disabled={unavailable}
       accessibilityRole="switch"
       accessibilityState={{ checked: enabled, disabled: unavailable }}
-      accessibilityLabel="Check invites against my contacts"
+      accessibilityLabel={accessibilityLabel || title}
     >
       <View style={styles.checkText}>
-        <Text style={styles.checkTitle}>Check invites against my contacts</Text>
-        <Text style={styles.checkNote}>{note}</Text>
+        <Text style={styles.checkTitle}>{title}</Text>
+        <Text style={styles.checkNote}>{detail}</Text>
       </View>
       <SharingSwitch on={enabled} />
     </Pressable>

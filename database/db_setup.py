@@ -64,6 +64,7 @@ def main():
         # Order matters: schema first, then role-specific functions
         sql_files = [
             "schema.sql",    # Core tables, indexes, and auth functions
+            "offers.sql",    # Offer catalog tables (banks, tiers, stores, card_offers)
             "holder.sql",    # Card Holder-specific functions
             "requester.sql", # Requester-specific functions
             "stats.sql",     # Card and user totals

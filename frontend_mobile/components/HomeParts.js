@@ -15,14 +15,14 @@ export function HomeIntro({ eyebrow, title, text }) {
   );
 }
 
-export function SectionHeading({ eyebrow, title, count }) {
+export function SectionHeading({ eyebrow, title, count, action }) {
   return (
     <View style={styles.heading}>
       <View>
-        <Text style={styles.eyebrow}>{eyebrow}</Text>
+        {eyebrow ? <Text style={styles.eyebrow}>{eyebrow}</Text> : null}
         <Text style={styles.headingTitle}>{title}</Text>
       </View>
-      {count ? <Text style={styles.count}>{count}</Text> : null}
+      {action || (count ? <Text style={styles.count}>{count}</Text> : null)}
     </View>
   );
 }

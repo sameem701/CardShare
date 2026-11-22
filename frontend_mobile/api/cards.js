@@ -1,30 +1,12 @@
 import { apiRequest } from './client';
 
-export const ALLOWED_BANKS = [
-  'HBL',
-  'MCB',
-  'UBL',
-  'Meezan',
-  'Bank Alfalah',
-  'Faysal Bank',
-  'Standard Chartered',
-  'Askari',
-  'Silk Bank',
-  'Allied Bank',
-  'Habib Metro',
-  'JS Bank',
-  'Soneri Bank',
-  'Bank Al Habib',
-];
+export function getBanks(sessionId, userId, options = {}) {
+  return apiRequest('/api/cards/banks', { sessionId, userId, signal: options.signal });
+}
 
-export const ALLOWED_CARD_TIERS = [
-  'Classic',
-  'Gold',
-  'Platinum',
-  'Titanium',
-  'Signature',
-  'World',
-];
+export function getTiers(sessionId, userId, options = {}) {
+  return apiRequest('/api/cards/tiers', { sessionId, userId, signal: options.signal });
+}
 
 export function getCards(sessionId, userId, options = {}) {
   return apiRequest('/api/cards', { sessionId, userId, signal: options.signal });

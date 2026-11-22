@@ -16,3 +16,12 @@ export function findUserByPhone(sessionId, userId, phone) {
     userId,
   });
 }
+
+export function findUsersByPhones(sessionId, userId, phones) {
+  return apiRequest('/api/profile/find-by-phones', {
+    method: 'POST',
+    body: { phones },
+    sessionId,
+    userId,
+  });
+}

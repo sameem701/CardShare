@@ -52,12 +52,21 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at BIGINT NOT NULL
 );
 
+/* ── BANKS / TIERS (names grow from Peekaboo parse; not a fixed enum) ── */
+CREATE TABLE IF NOT EXISTS banks (
+  name VARCHAR(100) PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS card_tiers (
+  name VARCHAR(50) PRIMARY KEY
+);
+
 /* ── CARDS ──────────────────────────────────────────────────── */
 CREATE TABLE IF NOT EXISTS cards (
   id            VARCHAR(36) PRIMARY KEY,
   user_id       VARCHAR(36) NOT NULL REFERENCES users(id),
-  bank_name     VARCHAR(100) NOT NULL CHECK (bank_name IN ('HBL', 'MCB', 'UBL', 'Meezan', 'Bank Alfalah', 'Faysal Bank', 'Standard Chartered', 'Askari', 'Silk Bank', 'Allied Bank', 'Habib Metro', 'JS Bank', 'Soneri Bank', 'Bank Al Habib')),
-  card_tier     VARCHAR(50) NOT NULL CHECK (card_tier IN ('Classic', 'Gold', 'Platinum', 'Titanium', 'Signature', 'World')),
+  bank_name     VARCHAR(100) NOT NULL REFERENCES banks(name),
+  card_tier     VARCHAR(50) NOT NULL REFERENCES card_tiers(name),
   allow_sharing INT NOT NULL DEFAULT 0,
   created_at    BIGINT NOT NULL
 );
@@ -95,6 +104,19 @@ CREATE TABLE IF NOT EXISTS invite_links (
   CHECK (TRIM(code) <> '')
 );
 
+CREATE TABLE IF NOT EXISTS stores (
+  id         INT PRIMARY KEY,
+  name       VARCHAR(200) NOT NULL,
+  slug       VARCHAR(200),
+  city       VARCHAR(100) NOT NULL DEFAULT 'Karachi',
+  updated_at BIGINT NOT NULL
+);
+
+ALTER TABLE stores ADD COLUMN IF NOT EXISTS city VARCHAR(100);
+UPDATE stores SET city = 'Karachi' WHERE city IS NULL OR btrim(city) = '';
+ALTER TABLE stores ALTER COLUMN city SET DEFAULT 'Karachi';
+ALTER TABLE stores ALTER COLUMN city SET NOT NULL;
+
 /* ── REQUESTS ───────────────────────────────────────────────── */
 -- Live order. Deleted when it becomes a transaction.
 -- A pending cancel or a decline deletes that one row. An accepted cancel, or Sara
@@ -126,12 +148,72 @@ CREATE TABLE IF NOT EXISTS requests (
   rq_status          VARCHAR(20) NOT NULL DEFAULT 'pending'
                        CHECK (rq_status IN ('pending', 'accepted', 'proof_submitted')),
   created_at         BIGINT NOT NULL,
-  updated_at         BIGINT NOT NULL
+  updated_at         BIGINT NOT NULL,
+  -- Peekaboo terms copied at Ask time. Empty when the order did not come from Apply.
+  store_id           INT REFERENCES stores(id),
+  discount_percent   INT,
+  discount_flat_pkr  INT,
+  cap_pkr            INT,
+  min_order_pkr      INT,
+  promo_code         VARCHAR(100),
+  estimated_save_pkr INT
 );
 
 ALTER TABLE requests ADD COLUMN IF NOT EXISTS order_group_id VARCHAR(36);
 UPDATE requests SET order_group_id = id WHERE order_group_id IS NULL;
 ALTER TABLE requests ALTER COLUMN order_group_id SET NOT NULL;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS store_id INT REFERENCES stores(id);
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS discount_percent INT;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS discount_flat_pkr INT;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS cap_pkr INT;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS min_order_pkr INT;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS promo_code VARCHAR(100);
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS estimated_save_pkr INT;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS holder_reply VARCHAR(20);
+UPDATE requests SET holder_reply = 'sent' WHERE holder_reply IS NULL;
+ALTER TABLE requests ALTER COLUMN holder_reply SET DEFAULT 'sent';
+ALTER TABLE requests ALTER COLUMN holder_reply SET NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'requests_holder_reply_check'
+      AND conrelid = 'public.requests'::regclass
+  ) THEN
+    ALTER TABLE requests
+      ADD CONSTRAINT requests_holder_reply_check
+      CHECK (holder_reply IN ('sent', 'available'));
+  END IF;
+END $$;
+
+-- Product rows for one Start order (shared by every request in the group).
+CREATE TABLE IF NOT EXISTS request_products (
+  id             VARCHAR(36) PRIMARY KEY,
+  order_group_id VARCHAR(36) NOT NULL,
+  title          VARCHAR(200),
+  product_url    TEXT,
+  note           TEXT,
+  qty            INT NOT NULL DEFAULT 1 CHECK (qty >= 1 AND qty <= 99),
+  sort_order     INT NOT NULL DEFAULT 0,
+  created_at     BIGINT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_request_products_group ON request_products(order_group_id);
+
+CREATE OR REPLACE FUNCTION request_products_json(p_group_id VARCHAR)
+RETURNS JSON AS $$
+BEGIN
+  RETURN (
+    SELECT COALESCE(json_agg(row_to_json(p) ORDER BY p.sort_order, p.created_at), '[]'::json)
+    FROM (
+      SELECT id, title, product_url, note, qty, sort_order
+      FROM request_products
+      WHERE order_group_id = p_group_id
+    ) p
+  );
+END;
+$$ LANGUAGE plpgsql STABLE;
 
 -- A row inserted without a group id is a group of one. The current single-person
 -- create still works until it is replaced. A Start order that passes a group id
@@ -670,6 +752,28 @@ END;
 $$ LANGUAGE plpgsql;
 
 
+-- Match several phone numbers to accounts that have finished setup.
+CREATE OR REPLACE FUNCTION find_users_by_phones(p_phones TEXT[])
+RETURNS JSON AS $$
+BEGIN
+  RETURN (
+    SELECT COALESCE(
+      json_agg(json_build_object(
+        'id', u.id,
+        'display_name', u.display_name,
+        'phone', u.phone
+      ) ORDER BY u.display_name),
+      '[]'::json
+    )
+    FROM users u
+    WHERE u.phone = ANY (p_phones)
+      AND u.display_name IS NOT NULL
+      AND btrim(u.display_name) <> ''
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+
 /* ─────────────────────────────────────────────────────────────
    CARDS
    User adds cards, toggles sharing, then circle members can see them
@@ -684,6 +788,12 @@ CREATE OR REPLACE PROCEDURE add_card(
   p_card_tier VARCHAR(50)
 ) AS $$
 BEGIN
+  IF NOT EXISTS (SELECT 1 FROM banks WHERE name = p_bank_name) THEN
+    RAISE EXCEPTION 'Unknown bank.';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM card_tiers WHERE name = p_card_tier) THEN
+    RAISE EXCEPTION 'Unknown card tier.';
+  END IF;
   INSERT INTO cards (id, user_id, bank_name, card_tier, created_at)
   VALUES (uuid_generate_v4()::varchar, p_user_id, p_bank_name, p_card_tier, extract(epoch from now()) * 1000);
 END;

@@ -7,6 +7,7 @@ import { useTopInset } from '../hooks/useTopInset';
 import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
 import { buildDisplayName, splitDisplayName } from '../utils/initials';
+import { markOnboardingPending } from '../utils/onboardingTour';
 
 const MAX_FIRST = 50;
 const MAX_LAST = 49;
@@ -65,6 +66,7 @@ export default function NameScreen({ onBack, onSaved }) {
     setError('');
     try {
       await updateProfile(sessionId, user.id, displayName, cityValue);
+      await markOnboardingPending(user.id);
       await updateUser({ display_name: displayName, city: cityValue });
       onSaved?.(displayName);
     } catch (err) {

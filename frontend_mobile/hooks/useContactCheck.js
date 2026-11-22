@@ -41,13 +41,20 @@ export function useContactCheck(userId, phones, active) {
     return () => { live = false; };
   }, [userId]);
 
-  // Read the permission again whenever the screen shows, in case it was changed in Settings.
+  // Re-read the saved switch and OS permission when this screen shows, so Settings
+  // and Pending stay on the same choice.
   useEffect(() => {
-    if (!active) return undefined;
+    if (!active || !userId) return undefined;
     let live = true;
+    readContactCheck(userId).then((value) => {
+      if (!live) return;
+      latest.current = value;
+      setStored(value);
+      setLoaded(true);
+    });
     contactsPermission().then((state) => { if (live) setPermission(state); });
     return () => { live = false; };
-  }, [active]);
+  }, [active, userId]);
 
   const enabled = loaded && stored.on && permission === 'granted';
   const phoneKey = phones ? phones.join('|') : null;

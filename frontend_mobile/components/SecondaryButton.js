@@ -11,6 +11,7 @@ export default function SecondaryButton({ label, onPress, disabled, danger, comp
         compact && styles.compact,
         danger && styles.danger,
         pressed && !disabled && styles.pressed,
+        pressed && !disabled && { transform: [{ scale: theme.motion.press }] },
         disabled && styles.disabled,
       ]}
       onPress={onPress}

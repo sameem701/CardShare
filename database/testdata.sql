@@ -28,12 +28,13 @@
 --   Sara  → Bilal   accepted
 --   Ahmed → Bilal   accepted
 --
--- Cards (shared = visible to the circle, Request card works on it):
---   Sara   HBL Gold (shared), Standard Chartered Platinum (shared), Meezan Classic (off)
---   Ahmed  UBL Platinum (shared), MCB Signature (shared), Bank Alfalah World (off)
---   Bilal  Askari Titanium (shared), JS Bank Gold (shared), Faysal Bank Classic (off)
+-- Cards (shared = visible to the circle, Request card works on it).
+-- Bank names match the Peekaboo catalog from load_offers.py (no seed bank/tier rows).
+--   Sara   Habib Bank Limited Gold (shared), Allied Bank Platinum (shared), Meezan Bank Classic (off)
+--   Ahmed  United Bank Limited (UBL) Platinum (shared), MCB Bank Signature (shared), Bank Alfalah World (off)
+--   Bilal  Askari Bank Titanium (shared), Al Baraka Bank Gold (shared), Faysal Bank Classic (off)
 -- Every member has two shared cards, so the circle carousel shows "2 cards" for all.
--- Meezan Classic, Bank Alfalah World and Faysal Classic have no paid order, so Manage
+-- Meezan Bank Classic, Bank Alfalah World and Faysal Classic have no paid order, so Manage
 -- Cards shows the "No orders yet" stats box for them.
 --
 -- Live orders, all six directions (the database allows one per pair and direction):
@@ -183,16 +184,17 @@ INSERT INTO users (id, phone, display_name, city, created_at) VALUES
   ('aaaaaaaa-0010-4000-8000-000000000010', '+923002323232', 'Talha Javed',      'Karachi', (extract(epoch FROM timestamptz '2026-09-05 10:30:00+05') * 1000)::bigint);
 
 -- Every tier appears once. Each person has a card that is sharing and a card that is not.
+-- bank_name / card_tier must already exist from the Peekaboo catalog load.
 INSERT INTO cards (id, user_id, bank_name, card_tier, allow_sharing, created_at) VALUES
-  ('cccccccc-0001-4000-8000-000000000001', 'aaaaaaaa-0001-4000-8000-000000000001', 'HBL',          'Gold',      1, (extract(epoch FROM timestamptz '2026-09-02 11:00:00+05') * 1000)::bigint),
-  ('cccccccc-0001-4000-8000-000000000002', 'aaaaaaaa-0001-4000-8000-000000000001', 'Meezan',       'Classic',   0, (extract(epoch FROM timestamptz '2026-09-02 11:05:00+05') * 1000)::bigint),
-  ('cccccccc-0002-4000-8000-000000000001', 'aaaaaaaa-0002-4000-8000-000000000002', 'UBL',          'Platinum',  1, (extract(epoch FROM timestamptz '2026-09-02 12:00:00+05') * 1000)::bigint),
-  ('cccccccc-0002-4000-8000-000000000002', 'aaaaaaaa-0002-4000-8000-000000000002', 'MCB',          'Signature', 1, (extract(epoch FROM timestamptz '2026-09-02 12:05:00+05') * 1000)::bigint),
-  ('cccccccc-0002-4000-8000-000000000003', 'aaaaaaaa-0002-4000-8000-000000000002', 'Bank Alfalah', 'World',     0, (extract(epoch FROM timestamptz '2026-09-02 12:10:00+05') * 1000)::bigint),
-  ('cccccccc-0003-4000-8000-000000000001', 'aaaaaaaa-0003-4000-8000-000000000003', 'Askari',       'Titanium',  1, (extract(epoch FROM timestamptz '2026-09-02 13:00:00+05') * 1000)::bigint),
-  ('cccccccc-0003-4000-8000-000000000002', 'aaaaaaaa-0003-4000-8000-000000000003', 'Faysal Bank',  'Classic',   0, (extract(epoch FROM timestamptz '2026-09-02 13:05:00+05') * 1000)::bigint),
-  ('cccccccc-0001-4000-8000-000000000003', 'aaaaaaaa-0001-4000-8000-000000000001', 'Standard Chartered', 'Platinum', 1, (extract(epoch FROM timestamptz '2026-09-04 11:00:00+05') * 1000)::bigint),
-  ('cccccccc-0003-4000-8000-000000000003', 'aaaaaaaa-0003-4000-8000-000000000003', 'JS Bank',      'Gold',      1, (extract(epoch FROM timestamptz '2026-09-04 13:00:00+05') * 1000)::bigint);
+  ('cccccccc-0001-4000-8000-000000000001', 'aaaaaaaa-0001-4000-8000-000000000001', 'Habib Bank Limited',          'Gold',      1, (extract(epoch FROM timestamptz '2026-09-02 11:00:00+05') * 1000)::bigint),
+  ('cccccccc-0001-4000-8000-000000000002', 'aaaaaaaa-0001-4000-8000-000000000001', 'Meezan Bank',                 'Classic',   0, (extract(epoch FROM timestamptz '2026-09-02 11:05:00+05') * 1000)::bigint),
+  ('cccccccc-0002-4000-8000-000000000001', 'aaaaaaaa-0002-4000-8000-000000000002', 'United Bank Limited (UBL)',   'Platinum',  1, (extract(epoch FROM timestamptz '2026-09-02 12:00:00+05') * 1000)::bigint),
+  ('cccccccc-0002-4000-8000-000000000002', 'aaaaaaaa-0002-4000-8000-000000000002', 'MCB Bank',                    'Signature', 1, (extract(epoch FROM timestamptz '2026-09-02 12:05:00+05') * 1000)::bigint),
+  ('cccccccc-0002-4000-8000-000000000003', 'aaaaaaaa-0002-4000-8000-000000000002', 'Bank Alfalah',                'World',     0, (extract(epoch FROM timestamptz '2026-09-02 12:10:00+05') * 1000)::bigint),
+  ('cccccccc-0003-4000-8000-000000000001', 'aaaaaaaa-0003-4000-8000-000000000003', 'Askari Bank',                 'Titanium',  1, (extract(epoch FROM timestamptz '2026-09-02 13:00:00+05') * 1000)::bigint),
+  ('cccccccc-0003-4000-8000-000000000002', 'aaaaaaaa-0003-4000-8000-000000000003', 'Faysal Bank',                 'Classic',   0, (extract(epoch FROM timestamptz '2026-09-02 13:05:00+05') * 1000)::bigint),
+  ('cccccccc-0001-4000-8000-000000000003', 'aaaaaaaa-0001-4000-8000-000000000001', 'Allied Bank',                 'Platinum',  1, (extract(epoch FROM timestamptz '2026-09-04 11:00:00+05') * 1000)::bigint),
+  ('cccccccc-0003-4000-8000-000000000003', 'aaaaaaaa-0003-4000-8000-000000000003', 'Al Baraka Bank',              'Gold',      1, (extract(epoch FROM timestamptz '2026-09-04 13:00:00+05') * 1000)::bigint);
 
 INSERT INTO invite_links (user_id, code, created_at) VALUES
   ('aaaaaaaa-0001-4000-8000-000000000001', 'invitesara01xxxxxxxxxxxxxxxxxxxx', (extract(epoch FROM timestamptz '2026-09-01 09:00:00+05') * 1000)::bigint),
@@ -322,6 +324,13 @@ INSERT INTO requests (
     (extract(epoch FROM timestamptz '2026-10-14 15:30:00+05') * 1000)::bigint
   );
 
+-- Peekaboo store id when the catalog load has foodpanda (id 200). No-op otherwise.
+UPDATE requests r
+SET store_id = s.id
+FROM stores s
+WHERE r.id = 'rrrrrrrr-0003-4000-8000-000000000003'
+  AND s.id = 200;
+
 INSERT INTO transactions (
   id, requester_id, requester_name, card_holder_id, card_holder_name, merchant, delivery_address, order_amount,
   card_id, bank_name, card_tier, actual_amount_paid, holder_share, screenshot_url, txn_status,
@@ -337,7 +346,7 @@ INSERT INTO transactions (
     'House 12, Street 4, DHA Phase 5, Lahore',
     5600,
     'cccccccc-0002-4000-8000-000000000001',
-    'UBL', 'Platinum',
+    'United Bank Limited (UBL)', 'Platinum',
     4900, 140, 'seed/sapphire-receipt.jpg',
     'unpaid', NULL,
     (extract(epoch FROM timestamptz '2026-10-08 14:00:00+05') * 1000)::bigint,
@@ -353,7 +362,7 @@ INSERT INTO transactions (
     'House 12, Street 4, DHA Phase 5, Lahore',
     3200,
     'cccccccc-0002-4000-8000-000000000002',
-    'MCB', 'Signature',
+    'MCB Bank', 'Signature',
     2800, 80, 'seed/naheed-receipt.jpg',
     'paid', NULL,
     (extract(epoch FROM timestamptz '2026-09-20 11:00:00+05') * 1000)::bigint,
@@ -369,7 +378,7 @@ INSERT INTO transactions (
     'House 12, Street 4, DHA Phase 5, Lahore',
     6100,
     'cccccccc-0002-4000-8000-000000000001',
-    'UBL', 'Platinum',
+    'United Bank Limited (UBL)', 'Platinum',
     NULL, NULL, NULL,
     'cancelled_by_requester', 'Wrong size. I will reorder.',
     (extract(epoch FROM timestamptz '2026-09-25 13:00:00+05') * 1000)::bigint,
@@ -385,7 +394,7 @@ INSERT INTO transactions (
     'Flat 8, Askari 11, Lahore',
     4500,
     'cccccccc-0001-4000-8000-000000000001',
-    'HBL', 'Gold',
+    'Habib Bank Limited', 'Gold',
     NULL, NULL, NULL,
     'cancelled_by_holder', 'The store was out of stock.',
     (extract(epoch FROM timestamptz '2026-09-28 15:00:00+05') * 1000)::bigint,
@@ -401,7 +410,7 @@ INSERT INTO transactions (
     'Plot 19, Johar Town, Lahore',
     2700,
     'cccccccc-0001-4000-8000-000000000001',
-    'HBL', 'Gold',
+    'Habib Bank Limited', 'Gold',
     2400, 60, 'seed/imtiaz-receipt.jpg',
     'paid', NULL,
     (extract(epoch FROM timestamptz '2026-09-18 12:00:00+05') * 1000)::bigint,
@@ -417,7 +426,7 @@ INSERT INTO transactions (
     'Flat 8, Askari 11, Lahore',
     5100,
     'cccccccc-0001-4000-8000-000000000001',
-    'HBL', 'Gold',
+    'Habib Bank Limited', 'Gold',
     4300, 160, 'seed/bonanza-receipt.jpg',
     'paid', NULL,
     (extract(epoch FROM timestamptz '2026-10-04 12:00:00+05') * 1000)::bigint,
@@ -433,7 +442,7 @@ INSERT INTO transactions (
     'House 12, Street 4, DHA Phase 5, Lahore',
     3900,
     'cccccccc-0003-4000-8000-000000000001',
-    'Askari', 'Titanium',
+    'Askari Bank', 'Titanium',
     3100, 160, 'seed/alfatah-receipt.jpg',
     'paid', NULL,
     (extract(epoch FROM timestamptz '2026-10-05 13:00:00+05') * 1000)::bigint,
@@ -449,7 +458,7 @@ INSERT INTO transactions (
     'Plot 19, Johar Town, Lahore',
     2200,
     'cccccccc-0001-4000-8000-000000000001',
-    'HBL', 'Gold',
+    'Habib Bank Limited', 'Gold',
     1900, 60, 'seed/bareeze-receipt.jpg',
     'unpaid', NULL,
     (extract(epoch FROM timestamptz '2026-10-11 15:00:00+05') * 1000)::bigint,
@@ -465,7 +474,7 @@ INSERT INTO transactions (
     'Flat 8, Askari 11, Lahore',
     3600,
     'cccccccc-0001-4000-8000-000000000001',
-    'HBL', 'Gold',
+    'Habib Bank Limited', 'Gold',
     NULL, NULL, NULL,
     'cancelled_by_requester', 'Changed my mind about the shoes.',
     (extract(epoch FROM timestamptz '2026-10-02 14:00:00+05') * 1000)::bigint,
@@ -481,7 +490,7 @@ INSERT INTO transactions (
     'House 12, Street 4, DHA Phase 5, Lahore',
     4800,
     'cccccccc-0003-4000-8000-000000000001',
-    'Askari', 'Titanium',
+    'Askari Bank', 'Titanium',
     NULL, NULL, NULL,
     'cancelled_by_holder', 'Card limit was already used.',
     (extract(epoch FROM timestamptz '2026-10-03 12:00:00+05') * 1000)::bigint,
@@ -497,7 +506,7 @@ INSERT INTO transactions (
     'Plot 19, Johar Town, Lahore',
     6400,
     'cccccccc-0002-4000-8000-000000000002',
-    'MCB', 'Signature',
+    'MCB Bank', 'Signature',
     5800, 120, 'seed/carrefour-receipt.jpg',
     'paid', NULL,
     (extract(epoch FROM timestamptz '2026-10-06 17:00:00+05') * 1000)::bigint,
@@ -513,7 +522,7 @@ INSERT INTO transactions (
     'House 12, Street 4, DHA Phase 5, Lahore',
     1800,
     'cccccccc-0002-4000-8000-000000000001',
-    'UBL', 'Platinum',
+    'United Bank Limited (UBL)', 'Platinum',
     1500, 60, 'seed/miniso-receipt.jpg',
     'paid', NULL,
     (extract(epoch FROM timestamptz '2026-10-08 11:00:00+05') * 1000)::bigint,
@@ -529,7 +538,7 @@ INSERT INTO transactions (
     'Flat 8, Askari 11, Lahore',
     4100,
     'cccccccc-0003-4000-8000-000000000001',
-    'Askari', 'Titanium',
+    'Askari Bank', 'Titanium',
     3600, 100, 'seed/darazmart-receipt.jpg',
     'unpaid', NULL,
     (extract(epoch FROM timestamptz '2026-10-10 13:00:00+05') * 1000)::bigint,
@@ -545,7 +554,7 @@ INSERT INTO transactions (
     'Plot 19, Johar Town, Lahore',
     7700,
     'cccccccc-0002-4000-8000-000000000001',
-    'UBL', 'Platinum',
+    'United Bank Limited (UBL)', 'Platinum',
     NULL, NULL, NULL,
     'cancelled_by_holder', 'The shop declined the card.',
     (extract(epoch FROM timestamptz '2026-09-30 14:00:00+05') * 1000)::bigint,
@@ -577,7 +586,7 @@ INSERT INTO transactions (
     'Plot 19, Johar Town, Lahore',
     5300,
     'cccccccc-0001-4000-8000-000000000002',
-    'Meezan', 'Classic',
+    'Meezan Bank', 'Classic',
     NULL, NULL, NULL,
     'cancelled_by_requester', 'Found it cheaper in store.',
     (extract(epoch FROM timestamptz '2026-10-01 12:00:00+05') * 1000)::bigint,
@@ -593,7 +602,7 @@ INSERT INTO transactions (
     'House 12, Street 4, DHA Phase 5, Lahore',
     2600,
     'cccccccc-0003-4000-8000-000000000001',
-    'Askari', 'Titanium',
+    'Askari Bank', 'Titanium',
     2100, 100, 'seed/hyperstar-receipt.jpg',
     'paid', NULL,
     (extract(epoch FROM timestamptz '2026-09-12 13:00:00+05') * 1000)::bigint,
@@ -609,7 +618,7 @@ INSERT INTO transactions (
     'Flat 8, Askari 11, Lahore',
     3400,
     'cccccccc-0003-4000-8000-000000000001',
-    'Askari', 'Titanium',
+    'Askari Bank', 'Titanium',
     NULL, NULL, NULL,
     'cancelled_by_requester', 'Ordered the wrong colour.',
     (extract(epoch FROM timestamptz '2026-10-09 14:00:00+05') * 1000)::bigint,
@@ -621,7 +630,7 @@ INSERT INTO transactions (
     'aaaaaaaa-0002-4000-8000-000000000002', 'Ahmed Ali',
     'aaaaaaaa-0003-4000-8000-000000000003', 'Bilal Hussain',
     'Gul Ahmed', 'Flat 8, Askari 11, Lahore', 2000,
-    'cccccccc-0003-4000-8000-000000000001', 'Askari', 'Titanium',
+    'cccccccc-0003-4000-8000-000000000001', 'Askari Bank', 'Titanium',
     2000, 0, 'seed/gulahmed-receipt.jpg', 'paid', NULL,
     pg_temp.seed_ts(0, 1), pg_temp.seed_ts(0, 2)
   ),
@@ -631,7 +640,7 @@ INSERT INTO transactions (
     'aaaaaaaa-0003-4000-8000-000000000003', 'Bilal Hussain',
     'aaaaaaaa-0001-4000-8000-000000000001', 'Sara Khan',
     'Alkaram Studio', 'Plot 19, Johar Town, Lahore', 8200,
-    'cccccccc-0001-4000-8000-000000000001', 'HBL', 'Gold',
+    'cccccccc-0001-4000-8000-000000000001', 'Habib Bank Limited', 'Gold',
     6500, 340, 'seed/alkaram-receipt.jpg', 'paid', NULL,
     pg_temp.seed_ts(-1, 140), pg_temp.seed_ts(-1, 150)
   ),
@@ -651,7 +660,7 @@ INSERT INTO transactions (
     'aaaaaaaa-0001-4000-8000-000000000001', 'Sara Khan',
     'aaaaaaaa-0002-4000-8000-000000000002', 'Ahmed Ali',
     'Khaadi', 'House 12, Street 4, DHA Phase 5, Lahore', 12000,
-    'cccccccc-0002-4000-8000-000000000002', 'MCB', 'Signature',
+    'cccccccc-0002-4000-8000-000000000002', 'MCB Bank', 'Signature',
     9800, 440, 'seed/khaadi-big-receipt.jpg', 'paid', NULL,
     pg_temp.seed_ts(0, 2), pg_temp.seed_ts(0, 4)
   ),
@@ -661,7 +670,7 @@ INSERT INTO transactions (
     'aaaaaaaa-0003-4000-8000-000000000003', 'Bilal Hussain',
     'aaaaaaaa-0002-4000-8000-000000000002', 'Ahmed Ali',
     'Limelight', 'Plot 19, Johar Town, Lahore', 5400,
-    'cccccccc-0002-4000-8000-000000000002', 'MCB', 'Signature',
+    'cccccccc-0002-4000-8000-000000000002', 'MCB Bank', 'Signature',
     NULL, NULL, NULL, 'cancelled_by_holder', 'My card was blocked for the day.',
     pg_temp.seed_ts(-1, 200), pg_temp.seed_ts(-1, 203)
   ),
@@ -671,18 +680,18 @@ INSERT INTO transactions (
     'aaaaaaaa-0002-4000-8000-000000000002', 'Ahmed Ali',
     'aaaaaaaa-0003-4000-8000-000000000003', 'Bilal Hussain',
     'Outfitters', 'Flat 8, Askari 11, Lahore', 3000,
-    'cccccccc-0003-4000-8000-000000000001', 'Askari', 'Titanium',
+    'cccccccc-0003-4000-8000-000000000001', 'Askari Bank', 'Titanium',
     2700, 60, 'seed/outfitters-receipt.jpg', 'paid', NULL,
     (extract(epoch FROM timestamptz '2026-08-20 12:00:00+05') * 1000)::bigint,
     (extract(epoch FROM timestamptz '2026-08-21 10:00:00+05') * 1000)::bigint
   ),
-  -- Bilal's JS Bank card earns, this month.
+  -- Bilal's Al Baraka Gold card earns, this month.
   (
     'tttttttt-0025-4000-8000-000000000025',
     'aaaaaaaa-0001-4000-8000-000000000001', 'Sara Khan',
     'aaaaaaaa-0003-4000-8000-000000000003', 'Bilal Hussain',
     'Sapphire', 'House 12, Street 4, DHA Phase 5, Lahore', 7000,
-    'cccccccc-0003-4000-8000-000000000003', 'JS Bank', 'Gold',
+    'cccccccc-0003-4000-8000-000000000003', 'Al Baraka Bank', 'Gold',
     6000, 200, 'seed/sapphire-js-receipt.jpg', 'paid', NULL,
     pg_temp.seed_ts(0, 3), pg_temp.seed_ts(0, 5)
   ),
@@ -692,17 +701,17 @@ INSERT INTO transactions (
     'aaaaaaaa-0003-4000-8000-000000000003', 'Bilal Hussain',
     'aaaaaaaa-0002-4000-8000-000000000002', 'Ahmed Ali',
     'Breeze', 'Plot 19, Johar Town, Lahore', 4400,
-    'cccccccc-0002-4000-8000-000000000001', 'UBL', 'Platinum',
+    'cccccccc-0002-4000-8000-000000000001', 'United Bank Limited (UBL)', 'Platinum',
     3900, 100, 'seed/breeze-receipt.jpg', 'unpaid', NULL,
     pg_temp.seed_ts(0, 2), pg_temp.seed_ts(0, 6)
   ),
-  -- Paid this month on Sara's Standard Chartered card, Ahmed requests.
+  -- Paid this month on Sara's Allied Bank Platinum card, Ahmed requests.
   (
     'tttttttt-0027-4000-8000-000000000027',
     'aaaaaaaa-0002-4000-8000-000000000002', 'Ahmed Ali',
     'aaaaaaaa-0001-4000-8000-000000000001', 'Sara Khan',
     'Nishat Linen', 'Flat 8, Askari 11, Lahore', 5500,
-    'cccccccc-0001-4000-8000-000000000003', 'Standard Chartered', 'Platinum',
+    'cccccccc-0001-4000-8000-000000000003', 'Allied Bank', 'Platinum',
     4500, 200, 'seed/nishat-receipt.jpg', 'paid', NULL,
     pg_temp.seed_ts(0, 4), pg_temp.seed_ts(0, 7)
   );

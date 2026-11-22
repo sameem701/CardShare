@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -9,6 +9,7 @@ import {
   declineOrder,
   getHolderTransaction,
   getOrder,
+  markAvailable,
 } from '../api/holder';
 import {
   acceptProof,
@@ -16,12 +17,14 @@ import {
   getRequest,
   getRequesterTransaction,
   rejectProof,
+  replaceRequestProducts,
 } from '../api/requester';
 import ConfirmDialog from '../components/ConfirmDialog';
 import ErrorBanner from '../components/ErrorBanner';
 import LoadingState from '../components/LoadingState';
 import { ChatIcon } from '../components/NavIcons';
 import PrimaryButton from '../components/PrimaryButton';
+import ProductRows from '../components/ProductRows';
 import ProofImage from '../components/ProofImage';
 import ScreenShell from '../components/ScreenShell';
 import TopBar from '../components/TopBar';
@@ -35,11 +38,14 @@ import { queryClient } from '../queries/client';
 import { useOrderUnread } from '../queries/inbox';
 import { useScreenQuery } from '../queries/useScreenQuery';
 import { formatPkr } from '../utils/format';
+import { cleanProductRows, productsFromApi } from '../utils/products';
 import {
   STEP_LABELS,
   buildOrder,
   orderFacts,
   orderHero,
+  orderOfferRows,
+  orderProductFacts,
   orderReceipt,
   stepsFilled,
 } from '../utils/orderView';
@@ -80,6 +86,12 @@ function FactIcon({ name }) {
         <>
           <Circle cx="12" cy="12" r="9" {...common} />
           <Path d="M12 11v5M12 8h.01" {...common} />
+        </>
+      ) : null}
+      {name === 'bag' ? (
+        <>
+          <Path d="M6 8h12l-1 12H7L6 8z" {...common} />
+          <Path d="M9 8V7a3 3 0 016 0v1" {...common} />
         </>
       ) : null}
     </Svg>
@@ -142,6 +154,15 @@ export default function OrderScreen() {
   const threadId = requestId || orderId || txnId;
   const o = buildOrder(source, query.data, role);
   const storedUnread = useOrderUnread(threadId);
+  const broadcastGroupId = source === 'request' && o?.role === 'asked' && o.state === 'pending' && o.groupSize > 1
+    ? o.orderGroupId
+    : '';
+
+  useEffect(() => {
+    if (!broadcastGroupId) return;
+    openScreen(navigation, 'broadcast', { groupId: broadcastGroupId }, { replace: true });
+  }, [broadcastGroupId, navigation]);
+
   usePrefetchChat(threadId, Boolean(o) && (o.state === 'accepted' || o.state === 'proof' || !o.live));
 
   const [working, setWorking] = useState(false);
@@ -149,6 +170,8 @@ export default function OrderScreen() {
   const [dialog, setDialog] = useState(null);
   const [dialogError, setDialogError] = useState('');
   const [detailsOpen, setDetailsOpen] = useState(null);
+  const [editingProducts, setEditingProducts] = useState(false);
+  const [productDraft, setProductDraft] = useState([]);
 
   const reload = async () => {
     await queryClient.invalidateQueries({ queryKey: ['inbox', uid] });
@@ -204,9 +227,35 @@ export default function OrderScreen() {
   }
 
   const hero = orderHero(o);
-  const facts = orderFacts(o);
+  const productFacts = orderProductFacts(o);
+  const hideProducts = o.state === 'proof';
+  const facts = hideProducts ? orderFacts(o) : [...orderFacts(o), ...productFacts];
   const receipt = orderReceipt(o);
-  const receiptOpen = detailsOpen == null ? o.state === 'paid' : detailsOpen;
+  const offerRows = orderOfferRows(o);
+  const hasDetails = Boolean(receipt) || offerRows.length > 0 || (hideProducts && productFacts.length > 0);
+  const receiptOpen = detailsOpen == null ? (o.state === 'paid' || o.state === 'proof') : detailsOpen;
+  const canEditProducts = o.role === 'asked' && o.live && (o.state === 'pending' || o.state === 'accepted') && o.orderGroupId;
+
+  const saveProducts = async () => {
+    const parsed = cleanProductRows(productDraft);
+    if (parsed.error) {
+      setError(parsed.error);
+      return;
+    }
+    setWorking(true);
+    setError('');
+    try {
+      await replaceRequestProducts(sessionId, uid, o.orderGroupId, parsed.products);
+      showToast('Products updated');
+      setEditingProducts(false);
+      await settle();
+      await query.refetch();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setWorking(false);
+    }
+  };
   const filled = stepsFilled(o.state);
   const showProof = Boolean(o.screenshot) && (o.state === 'proof' || o.state === 'unpaid' || o.state === 'paid');
   const unread = storedUnread ?? o.unread;
@@ -245,11 +294,13 @@ export default function OrderScreen() {
       run: () => run(() => rejectProof(sessionId, uid, requestId), 'Proof rejected'),
     },
     decline: {
-      title: 'Decline this request?',
-      body: `${name} will not see your card for this order.`,
-      confirmLabel: 'Decline',
+      title: o.groupSize > 1 ? 'Can’t take this?' : 'Decline this request?',
+      body: o.groupSize > 1
+        ? `${name} will not see you as available for this order.`
+        : `${name} will not see your card for this order.`,
+      confirmLabel: o.groupSize > 1 ? 'Can’t' : 'Decline',
       danger: true,
-      run: () => run(() => declineOrder(sessionId, uid, orderId), 'Request declined'),
+      run: () => run(() => declineOrder(sessionId, uid, orderId), o.groupSize > 1 ? 'Marked as can’t' : 'Request declined'),
     },
     received: {
       title: 'Money received?',
@@ -290,16 +341,32 @@ export default function OrderScreen() {
         </>
       );
     } else if (!asked && o.state === 'pending') {
-      actions = (
-        <>
-          <PrimaryButton
-            label="Accept"
-            loading={working}
-            onPress={() => run(() => acceptOrder(sessionId, uid, orderId), 'Order accepted', { stay: true })}
-          />
-          {link('Decline', 'decline')}
-        </>
-      );
+      const racing = o.groupSize > 1;
+      if (racing && o.holderReply === 'available') {
+        actions = <>{wait(`You’re available. Waiting for ${name} to choose.`)}{link('Can’t', 'decline')}</>;
+      } else if (racing) {
+        actions = (
+          <>
+            <PrimaryButton
+              label="Available"
+              loading={working}
+              onPress={() => run(() => markAvailable(sessionId, uid, orderId), 'You’re available', { stay: true })}
+            />
+            {link('Can’t', 'decline')}
+          </>
+        );
+      } else {
+        actions = (
+          <>
+            <PrimaryButton
+              label="Accept"
+              loading={working}
+              onPress={() => run(() => acceptOrder(sessionId, uid, orderId), 'Order accepted', { stay: true })}
+            />
+            {link('Decline', 'decline')}
+          </>
+        );
+      }
     } else if (!asked && o.state === 'accepted') {
       actions = (
         <>
@@ -359,6 +426,59 @@ export default function OrderScreen() {
           </View>
         ) : null}
 
+        {hasDetails && hideProducts ? (
+          <>
+            <Pressable
+              onPress={() => setDetailsOpen(!receiptOpen)}
+              style={styles.toggle}
+              accessibilityRole="button"
+              accessibilityState={{ expanded: receiptOpen }}
+            >
+              <Text style={styles.toggleText}>Details</Text>
+              <Text style={styles.toggleChevron}>{receiptOpen ? '\u2303' : '\u2304'}</Text>
+            </Pressable>
+            {receiptOpen ? (
+              <View style={styles.receipt}>
+                {offerRows.map((row) => (
+                  <View key={row.label} style={styles.receiptRow}>
+                    <Text style={styles.receiptLabel}>{row.label}</Text>
+                    <Text style={styles.receiptValue}>{row.value}</Text>
+                  </View>
+                ))}
+                {receipt ? receipt.rows.map((row) => (
+                  <View key={row.label} style={styles.receiptRow}>
+                    <Text style={styles.receiptLabel}>{row.label}</Text>
+                    <Text
+                      style={[
+                        styles.receiptValue,
+                        row.tone === 'dim' && styles.receiptDim,
+                        row.tone === 'earn' && styles.receiptEarn,
+                      ]}
+                    >
+                      {row.value}
+                    </Text>
+                  </View>
+                )) : null}
+                {receipt ? (
+                  <View style={[styles.receiptRow, styles.receiptTotal]}>
+                    <Text style={styles.totalLabel}>{receipt.totalLabel}</Text>
+                    <Text style={styles.totalValue}>{receipt.total}</Text>
+                  </View>
+                ) : null}
+                {productFacts.map((fact, index) => (
+                  <Pressable
+                    key={`p-${index}`}
+                    onPress={fact.url ? () => openUrl(fact.url) : undefined}
+                    style={styles.receiptRow}
+                  >
+                    <Text style={styles.receiptLabel}>{fact.text}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+          </>
+        ) : null}
+
         <View style={styles.facts}>
           {facts.map((fact, index) => {
             const row = (
@@ -386,7 +506,31 @@ export default function OrderScreen() {
           })}
         </View>
 
-        {receipt ? (
+        {canEditProducts ? (
+          <View style={styles.pad}>
+            {editingProducts ? (
+              <>
+                <ProductRows products={productDraft} onChange={setProductDraft} />
+                <PrimaryButton label={working ? 'Please wait…' : 'Save products'} loading={working} onPress={saveProducts} />
+                <Pressable onPress={() => setEditingProducts(false)} style={styles.linkBtn}>
+                  <Text style={[styles.linkText, styles.linkTextPlain]}>Cancel</Text>
+                </Pressable>
+              </>
+            ) : (
+              <Pressable
+                onPress={() => {
+                  setProductDraft(productsFromApi(o.products, o.url));
+                  setEditingProducts(true);
+                }}
+                style={styles.linkBtn}
+              >
+                <Text style={[styles.linkText, styles.linkTextPlain]}>Edit products</Text>
+              </Pressable>
+            )}
+          </View>
+        ) : null}
+
+        {hasDetails && !hideProducts ? (
           <>
             <Pressable
               onPress={() => setDetailsOpen(!receiptOpen)}
@@ -399,7 +543,13 @@ export default function OrderScreen() {
             </Pressable>
             {receiptOpen ? (
               <View style={styles.receipt}>
-                {receipt.rows.map((row) => (
+                {offerRows.map((row) => (
+                  <View key={row.label} style={styles.receiptRow}>
+                    <Text style={styles.receiptLabel}>{row.label}</Text>
+                    <Text style={styles.receiptValue}>{row.value}</Text>
+                  </View>
+                ))}
+                {receipt ? receipt.rows.map((row) => (
                   <View key={row.label} style={styles.receiptRow}>
                     <Text style={styles.receiptLabel}>{row.label}</Text>
                     <Text
@@ -412,11 +562,13 @@ export default function OrderScreen() {
                       {row.value}
                     </Text>
                   </View>
-                ))}
-                <View style={[styles.receiptRow, styles.receiptTotal]}>
-                  <Text style={styles.totalLabel}>{receipt.totalLabel}</Text>
-                  <Text style={styles.totalValue}>{receipt.total}</Text>
-                </View>
+                )) : null}
+                {receipt ? (
+                  <View style={[styles.receiptRow, styles.receiptTotal]}>
+                    <Text style={styles.totalLabel}>{receipt.totalLabel}</Text>
+                    <Text style={styles.totalValue}>{receipt.total}</Text>
+                  </View>
+                ) : null}
               </View>
             ) : null}
           </>

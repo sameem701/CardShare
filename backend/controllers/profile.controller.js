@@ -68,4 +68,32 @@ const findUserByPhone = async (req, res) => {
   }
 };
 
-module.exports = { getProfile, getStats, findUserByPhone };
+const MAX_PHONE_LOOKUP = 80;
+
+// POST /api/profile/find-by-phones
+// { phones: string[] } → accounts on CardShare (id, display_name, phone), excluding self.
+const findUsersByPhones = async (req, res) => {
+  const raw = Array.isArray(req.body?.phones) ? req.body.phones : [];
+  const phones = [...new Set(
+    raw
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+  )].slice(0, MAX_PHONE_LOOKUP);
+
+  if (!phones.length) {
+    return res.json([]);
+  }
+
+  try {
+    const { rows } = await db.query(
+      'SELECT find_users_by_phones($1) AS result',
+      [phones]
+    );
+    const found = Array.isArray(rows[0].result) ? rows[0].result : [];
+    res.json(found.filter((person) => person.id !== req.user.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
+module.exports = { getProfile, getStats, findUserByPhone, findUsersByPhones };

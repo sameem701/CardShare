@@ -98,6 +98,24 @@ const getOrder = async (req, res) => {
   }
 };
 
+// POST /api/holder/orders/:id/available
+// Broadcast only: mark ready so the requester can choose you.
+const markAvailable = async (req, res) => {
+  const holder_id = req.user.id;
+  const order_id = requireId(req, res, 'Order id');
+  if (!order_id) return;
+
+  try {
+    const { rows } = await db.query(
+      'SELECT set_holder_available($1, $2) AS result',
+      [order_id, holder_id]
+    );
+    res.json(rows[0].result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
 // POST /api/holder/orders/:id/accept
 // pending becomes accepted.
 const acceptRequest = async (req, res) => {
@@ -295,6 +313,7 @@ module.exports = {
   getActiveOrders,
   getOrder,
   acceptRequest,
+  markAvailable,
   declineRequest,
   cancelOrder,
   getScreenshotUploadUrl,

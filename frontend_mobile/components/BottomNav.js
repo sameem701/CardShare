@@ -5,6 +5,7 @@ import { useRoleMode } from '../context/RoleMode';
 import { useBottomInset } from '../hooks/useTopInset';
 import { itemsForMode } from '../utils/orderBanner';
 import { isYourTurn } from '../utils/requestInbox';
+import Chrome from './Chrome';
 import { NavIcon } from './NavIcons';
 
 function unreadLabel(count) {
@@ -27,7 +28,7 @@ export default function BottomNav({ state, navigation }) {
   const unread = unreadLabel(visible.reduce((sum, item) => sum + (Number(item.unreadCount) || 0), 0));
   const activeName = state.routes[state.index]?.name;
   return (
-    <View style={[styles.nav, { paddingBottom: bottomInset }]}>
+    <Chrome style={[styles.nav, { paddingBottom: bottomInset }]}>
       {tabs.map(([routeName, icon, label]) => {
         const active = routeName === activeName;
         const color = active ? theme.colors.green : theme.colors.text3;
@@ -39,7 +40,7 @@ export default function BottomNav({ state, navigation }) {
         return (
           <Pressable
             key={routeName}
-            style={styles.item}
+            style={({ pressed }) => [styles.item, pressed && { transform: [{ scale: theme.motion.press }] }]}
             onPress={() => navigation.navigate(routeName)}
             accessibilityRole="button"
             accessibilityLabel={accessibilityLabel}
@@ -57,16 +58,15 @@ export default function BottomNav({ state, navigation }) {
           </Pressable>
         );
       })}
-    </View>
+    </Chrome>
   );
 }
 
 const styles = StyleSheet.create({
   nav: {
     flexDirection: 'row',
-    backgroundColor: theme.colors.bg,
-    borderTopWidth: 0.5,
-    borderTopColor: theme.colors.border,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.08)',
     paddingTop: theme.spacing.sm,
   },
   item: {
@@ -97,7 +97,7 @@ const styles = StyleSheet.create({
     height: 16,
     paddingHorizontal: 4,
     borderRadius: 8,
-    backgroundColor: theme.colors.red,
+    backgroundColor: theme.colors.green,
     alignItems: 'center',
     justifyContent: 'center',
   },

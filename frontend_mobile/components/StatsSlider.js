@@ -34,6 +34,21 @@ function Pane({ width, kicker, total, thisMonth, lastMonth }) {
 
 // Two panes you swipe between: what you saved as a requester and what you
 // earned as a cardholder. The dots under it are tappable.
+export function HolderEarnStats({ stats }) {
+  const holder = stats?.holder || {};
+  return (
+    <View style={[styles.wrap, styles.holderOnly]}>
+      <Pane
+        width="100%"
+        kicker="AS CARDHOLDER · LIFETIME EARNED"
+        total={holder.earned_all}
+        thisMonth={holder.earned_month}
+        lastMonth={holder.earned_last_month}
+      />
+    </View>
+  );
+}
+
 export default function StatsSlider({ stats }) {
   const scroller = useRef(null);
   const scrollX = useRef(new Animated.Value(0)).current;
@@ -99,6 +114,9 @@ export default function StatsSlider({ stats }) {
 const styles = StyleSheet.create({
   wrap: {
     paddingHorizontal: theme.layout.screenPadding,
+  },
+  holderOnly: {
+    marginBottom: theme.spacing.lg,
   },
   page: {
     gap: 12,

@@ -59,6 +59,26 @@ async function allowContacts() {
   return (await requestContactsPermission()) === 'granted';
 }
 
+export async function listPhoneContacts() {
+  if (Platform.OS === 'web') return { unavailable: true, contacts: [] };
+  const allowed = await allowContacts();
+  if (!allowed) {
+    const state = await contactsPermission();
+    return { denied: true, blocked: state === 'blocked', contacts: [] };
+  }
+  const rows = await Contact.getAllDetails(NAME_FIELDS);
+  const byPhone = new Map();
+  for (const contact of rows || []) {
+    const name = realContactName(contact);
+    for (const entry of contact.phones || []) {
+      const phone = fullNumber(entry.number);
+      if (!phone || byPhone.has(phone)) continue;
+      byPhone.set(phone, { phone, name: name || phone });
+    }
+  }
+  return { contacts: [...byPhone.values()].slice(0, 80) };
+}
+
 export async function pickContact() {
   if (Platform.OS === 'web') return { unavailable: true };
   const allowed = await allowContacts();

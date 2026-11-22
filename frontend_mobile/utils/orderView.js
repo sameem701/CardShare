@@ -1,4 +1,4 @@
-import { formatPkr } from './format';
+import { asList, formatPkr } from './format';
 import { amountKept, amountOwed, recordedShare } from './settlement';
 
 // The single order screen shows live requests, live orders and closed
@@ -65,6 +65,16 @@ export function buildOrder(source, data, role) {
     screenshot: data.screenshot_signed_url || data.screenshot_url || '',
     unread: Number(data.unread_count) || 0,
     live: source !== 'txn',
+    promo: data.promo_code || '',
+    discountPercent: data.discount_percent != null ? Number(data.discount_percent) : null,
+    discountFlat: data.discount_flat_pkr != null ? Number(data.discount_flat_pkr) : null,
+    cap: data.cap_pkr != null ? Number(data.cap_pkr) : null,
+    min: data.min_order_pkr != null ? Number(data.min_order_pkr) : null,
+    estimatedSave: data.estimated_save_pkr != null ? Number(data.estimated_save_pkr) : null,
+    groupSize: Number(data.group_size) || 1,
+    holderReply: data.holder_reply || 'sent',
+    orderGroupId: data.order_group_id || '',
+    products: asList(data.products),
   };
 }
 
@@ -87,7 +97,11 @@ export function orderHero(o) {
 
   if (o.role === 'asked') {
     switch (o.state) {
-      case 'pending': return { line: `Waiting for ${name} to accept`, amount: o.price, sub: '' };
+      case 'pending': return {
+        line: o.groupSize > 1 ? 'Waiting for people to reply' : `Waiting for ${name} to accept`,
+        amount: o.price,
+        sub: '',
+      };
       case 'accepted': return { line: `${name} is buying it`, amount: o.price, sub: '' };
       case 'proof': return { line: `Check ${name}\u2019s proof`, amount: o.owed, sub: hasMoney ? `You save ${saved}` : '' };
       case 'unpaid': return { line: `Pay ${name} outside the app`, amount: o.owed, sub: hasMoney ? `You save ${saved}` : '' };
@@ -95,7 +109,15 @@ export function orderHero(o) {
     }
   }
   switch (o.state) {
-    case 'pending': return { line: `${name} wants this on your card`, amount: o.price, sub: '' };
+    case 'pending': return {
+      line: o.groupSize > 1 && o.holderReply === 'available'
+        ? `Waiting for ${name} to choose`
+        : o.groupSize > 1
+          ? `${name} asked a few people`
+          : `${name} wants this on your card`,
+      amount: o.price,
+      sub: '',
+    };
     case 'accepted': return { line: 'Buy it, then send proof', amount: o.price, sub: '' };
     case 'proof': return { line: `Waiting for ${name} to check`, amount: o.owed, sub: hasMoney ? `Includes your ${earned} incentive` : '' };
     case 'unpaid': return { line: `${name} owes you`, amount: o.owed, sub: hasMoney ? `Includes your ${earned} incentive` : '' };
@@ -114,9 +136,41 @@ export function orderFacts(o) {
       facts.push({ icon: 'pin', text: o.addr });
     }
   }
-  if (o.url) facts.push({ icon: 'link', text: o.url.replace(/^https?:\/\//, ''), kind: 'link', url: o.url });
+  if (o.url && !o.products?.length) {
+    facts.push({ icon: 'link', text: o.url.replace(/^https?:\/\//, ''), kind: 'link', url: o.url });
+  }
+  if (o.promo) facts.push({ icon: 'info', text: `Promo ${o.promo}` });
   if (o.note) facts.push({ icon: 'info', text: `\u201c${o.note}\u201d`, kind: 'note' });
   return facts;
+}
+
+export function orderProductFacts(o) {
+  if (!o?.products?.length) return [];
+  return o.products.map((item) => {
+    const qty = Number(item.qty) || 1;
+    const title = String(item.title || '').trim() || String(item.product_url || '').replace(/^https?:\/\//, '') || 'Product';
+    const qtyBit = qty > 1 ? ` \u00d7${qty}` : '';
+    const extra = item.note ? ` \u2014 ${item.note}` : '';
+    const url = item.product_url || '';
+    return {
+      icon: 'bag',
+      text: `${title}${qtyBit}${extra}`,
+      kind: url ? 'link' : '',
+      url,
+    };
+  });
+}
+
+export function orderOfferRows(o) {
+  if (!o || o.state === 'cancelled') return [];
+  const rows = [];
+  if (o.discountPercent != null) rows.push({ label: 'Discount', value: `${o.discountPercent}% off` });
+  else if (o.discountFlat != null) rows.push({ label: 'Discount', value: `${formatPkr(o.discountFlat)} off` });
+  if (o.cap != null) rows.push({ label: 'Max cap', value: formatPkr(o.cap) });
+  if (o.min != null) rows.push({ label: 'Min order', value: formatPkr(o.min) });
+  if (o.promo) rows.push({ label: 'Promo code', value: o.promo });
+  if (o.estimatedSave != null) rows.push({ label: 'Estimated save', value: formatPkr(o.estimatedSave) });
+  return rows;
 }
 
 // The collapsed Details receipt. Only once the card price is known.

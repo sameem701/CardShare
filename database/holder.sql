@@ -27,6 +27,21 @@ BEGIN
         req.rq_status,
         req.created_at,
         req.updated_at,
+        req.store_id,
+        req.discount_percent,
+        req.discount_flat_pkr,
+        req.cap_pkr,
+        req.min_order_pkr,
+        req.promo_code,
+        req.estimated_save_pkr,
+        req.order_group_id,
+        req.holder_reply,
+        (
+          SELECT COUNT(*)::int FROM requests g
+          WHERE g.order_group_id = req.order_group_id
+            AND g.rq_status = 'pending'
+        ) AS group_size,
+        request_products_json(req.order_group_id) AS products,
         u.display_name AS requester_name,
         c.bank_name,
         c.card_tier
@@ -75,6 +90,13 @@ BEGIN
   AND rq_status = 'pending'
   ORDER BY id
   FOR UPDATE;
+
+  IF (
+    SELECT COUNT(*) FROM requests
+    WHERE order_group_id = v_group AND rq_status = 'pending'
+  ) > 1 THEN
+    RAISE EXCEPTION 'Mark yourself available and wait for them to choose.';
+  END IF;
 
   IF NOT EXISTS (
     SELECT 1 FROM requests
@@ -143,6 +165,11 @@ BEGIN
 
   DELETE FROM chat_messages WHERE thread_id = p_request_id;
   DELETE FROM requests WHERE id = p_request_id;
+  DELETE FROM request_products
+  WHERE order_group_id = v_request.order_group_id
+    AND NOT EXISTS (
+      SELECT 1 FROM requests r WHERE r.order_group_id = v_request.order_group_id
+    );
 
   RETURN json_build_object(
     'request_id',    p_request_id,
@@ -312,6 +339,13 @@ BEGIN
         req.screenshot_url,
         req.created_at,
         req.updated_at,
+        req.store_id,
+        req.discount_percent,
+        req.discount_flat_pkr,
+        req.cap_pkr,
+        req.min_order_pkr,
+        req.promo_code,
+        req.estimated_save_pkr,
         u.display_name AS requester_name,
         c.bank_name,
         c.card_tier
@@ -354,6 +388,21 @@ BEGIN
         req.screenshot_url,
         req.created_at,
         req.updated_at,
+        req.store_id,
+        req.discount_percent,
+        req.discount_flat_pkr,
+        req.cap_pkr,
+        req.min_order_pkr,
+        req.promo_code,
+        req.estimated_save_pkr,
+        req.order_group_id,
+        req.holder_reply,
+        (
+          SELECT COUNT(*)::int FROM requests g
+          WHERE g.order_group_id = req.order_group_id
+            AND g.rq_status = 'pending'
+        ) AS group_size,
+        request_products_json(req.order_group_id) AS products,
         u.display_name AS requester_name,
         c.bank_name,
         c.card_tier,
@@ -469,12 +518,59 @@ BEGIN
   DELETE FROM chat_messages WHERE thread_id = p_request_id;
   DELETE FROM chat_reads WHERE thread_id = p_request_id;
   DELETE FROM requests WHERE id = p_request_id;
+  DELETE FROM request_products
+  WHERE order_group_id = v_request.order_group_id
+    AND NOT EXISTS (
+      SELECT 1 FROM requests r WHERE r.order_group_id = v_request.order_group_id
+    );
 
   RETURN json_build_object(
     'request_id',    p_request_id,
     'merchant',      v_request.merchant,
     'order_amount',  v_request.order_amount,
     'result',        'declined'
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+
+CREATE OR REPLACE FUNCTION set_holder_available(
+  p_request_id VARCHAR(36),
+  p_holder_id  VARCHAR(36)
+) RETURNS JSON AS $$
+DECLARE
+  v_group  VARCHAR(36);
+  v_status VARCHAR(20);
+  v_holder VARCHAR(36);
+  v_now    BIGINT;
+BEGIN
+  SELECT order_group_id, rq_status, card_holder_id
+  INTO v_group, v_status, v_holder
+  FROM requests
+  WHERE id = p_request_id
+  FOR UPDATE;
+
+  IF NOT FOUND OR v_holder <> p_holder_id OR v_status <> 'pending' THEN
+    RAISE EXCEPTION 'Request not found, access denied, or order already finalized.';
+  END IF;
+
+  IF (
+    SELECT COUNT(*) FROM requests
+    WHERE order_group_id = v_group AND rq_status = 'pending'
+  ) < 2 THEN
+    RAISE EXCEPTION 'This request is for you alone. Accept or decline it.';
+  END IF;
+
+  v_now := extract(epoch from now()) * 1000;
+
+  UPDATE requests
+  SET holder_reply = 'available',
+      updated_at = v_now
+  WHERE id = p_request_id;
+
+  RETURN json_build_object(
+    'request_id', p_request_id,
+    'holder_reply', 'available'
   );
 END;
 $$ LANGUAGE plpgsql;

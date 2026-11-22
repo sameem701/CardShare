@@ -1,31 +1,5 @@
 const db = require('../config/db');
 
-const ALLOWED_BANKS = [
-  'HBL',
-  'MCB',
-  'UBL',
-  'Meezan',
-  'Bank Alfalah',
-  'Faysal Bank',
-  'Standard Chartered',
-  'Askari',
-  'Silk Bank',
-  'Allied Bank',
-  'Habib Metro',
-  'JS Bank',
-  'Soneri Bank',
-  'Bank Al Habib',
-];
-
-const ALLOWED_CARD_TIERS = [
-  'Classic',
-  'Gold',
-  'Platinum',
-  'Titanium',
-  'Signature',
-  'World',
-];
-
 const validateCardFields = (bank_name, card_tier) => {
   if (!bank_name || String(bank_name).trim() === '') {
     return 'bank_name is required.';
@@ -33,17 +7,6 @@ const validateCardFields = (bank_name, card_tier) => {
   if (!card_tier || String(card_tier).trim() === '') {
     return 'card_tier is required.';
   }
-
-  const bank = String(bank_name).trim();
-  const tier = String(card_tier).trim();
-
-  if (!ALLOWED_BANKS.includes(bank)) {
-    return `Invalid bank_name. Allowed: ${ALLOWED_BANKS.join(', ')}.`;
-  }
-  if (!ALLOWED_CARD_TIERS.includes(tier)) {
-    return `Invalid card_tier. Allowed: ${ALLOWED_CARD_TIERS.join(', ')}.`;
-  }
-
   return null;
 };
 
@@ -65,6 +28,27 @@ const addCard = async (req, res) => {
       String(card_tier).trim(),
     ]);
     res.status(201).json({ message: 'Card added.' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
+// GET /api/cards/banks
+// Peekaboo catalog names from the banks table.
+const listBanks = async (req, res) => {
+  try {
+    const { rows } = await db.query('SELECT list_banks() AS result');
+    res.json(rows[0].result ?? []);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
+// GET /api/cards/tiers
+const listCardTiers = async (req, res) => {
+  try {
+    const { rows } = await db.query('SELECT list_card_tiers() AS result');
+    res.json(rows[0].result ?? []);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -138,10 +122,10 @@ const deleteCard = async (req, res) => {
 
 module.exports = {
   addCard,
+  listBanks,
+  listCardTiers,
   getCards,
   getCardStats,
   toggleCardSharing,
   deleteCard,
-  ALLOWED_BANKS,
-  ALLOWED_CARD_TIERS,
 };

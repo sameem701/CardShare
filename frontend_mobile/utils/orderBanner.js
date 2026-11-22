@@ -18,12 +18,20 @@ function headFor(item) {
   const name = item.firstName || 'Someone';
   const store = item.title || 'Order';
   if (item.role === 'asked') {
-    if (item.status === 'pending') return `Waiting for ${name} to accept`;
+    if (item.status === 'pending') {
+      if (item.groupSize > 1 && item.availableCount > 0) return 'Choose who places this order';
+      if (item.groupSize > 1) return 'Waiting for people to reply';
+      return `Waiting for ${name} to accept`;
+    }
     if (item.status === 'accepted') return `${name} is buying it`;
     if (item.status === 'proof_submitted') return `Check ${name}\u2019s proof`;
     if (item.status === 'unpaid') return `Pay ${name}`;
   } else {
-    if (item.status === 'pending') return `${name} wants ${store} on your ${item.bankName || 'card'}`.trim();
+    if (item.status === 'pending') {
+      if (item.groupSize > 1 && item.holderReply === 'available') return `Waiting for ${name} to choose`;
+      if (item.groupSize > 1) return `${name} asked a few people for ${store}`;
+      return `${name} wants ${store} on your ${item.bankName || 'card'}`.trim();
+    }
     if (item.status === 'accepted') return `Buy it and send proof for ${name}`;
     if (item.status === 'proof_submitted') return `Waiting for ${name} to check`;
     if (item.status === 'unpaid') return `${name} owes you`;

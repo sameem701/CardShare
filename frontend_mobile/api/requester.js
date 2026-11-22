@@ -8,6 +8,28 @@ export function getRequest(sessionId, userId, requestId, options = {}) {
   return apiRequest(`/api/requester/requests/${requestId}`, { sessionId, userId, signal: options.signal });
 }
 
+export function getOrderGroup(sessionId, userId, groupId, options = {}) {
+  return apiRequest(`/api/requester/groups/${groupId}`, { sessionId, userId, signal: options.signal });
+}
+
+export function chooseBroadcastHolder(sessionId, userId, groupId, holderId) {
+  return apiRequest(`/api/requester/groups/${groupId}/choose`, {
+    method: 'POST',
+    body: { card_holder_id: holderId },
+    sessionId,
+    userId,
+  });
+}
+
+export function replaceRequestProducts(sessionId, userId, groupId, products) {
+  return apiRequest(`/api/requester/groups/${groupId}/products`, {
+    method: 'PUT',
+    body: { products },
+    sessionId,
+    userId,
+  });
+}
+
 export function createRequest(sessionId, userId, payload) {
   return apiRequest('/api/requester/requests', {
     method: 'POST',

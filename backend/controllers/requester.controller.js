@@ -43,6 +43,9 @@ function holdersFromBody(holders) {
   if (!Array.isArray(holders) || holders.length === 0) {
     return { error: 'Choose at least one person.' };
   }
+  if (holders.length > 5) {
+    return { error: 'Ask up to 5 people.' };
+  }
   const cleaned = [];
   const seen = new Set();
   for (const holder of holders) {
@@ -60,9 +63,84 @@ function holdersFromBody(holders) {
   return { holders: cleaned };
 }
 
+function optionalInt(value, name, { positive } = {}) {
+  if (value == null || value === '') return { ok: true, value: null };
+  const n = Number(value);
+  if (!Number.isInteger(n)) {
+    return { error: `${name} must be an integer.` };
+  }
+  if (positive && n <= 0) {
+    return { error: `${name} must be a positive integer.` };
+  }
+  return { ok: true, value: n };
+}
+
+// Peekaboo terms from Apply. Missing or {} means the order has no catalog snapshot.
+function offerFromBody(offer) {
+  if (offer == null || offer === '') return { offer: null };
+  if (typeof offer !== 'object' || Array.isArray(offer)) {
+    return { error: 'offer must be an object.' };
+  }
+
+  const store = optionalInt(offer.store_id, 'offer.store_id', { positive: true });
+  if (store.error) return store;
+  const percent = optionalInt(offer.discount_percent, 'offer.discount_percent');
+  if (percent.error) return percent;
+  const flat = optionalInt(offer.discount_flat_pkr, 'offer.discount_flat_pkr');
+  if (flat.error) return flat;
+  const cap = optionalInt(offer.cap_pkr, 'offer.cap_pkr');
+  if (cap.error) return cap;
+  const min = optionalInt(offer.min_order_pkr, 'offer.min_order_pkr');
+  if (min.error) return min;
+  const save = optionalInt(offer.estimated_save_pkr, 'offer.estimated_save_pkr');
+  if (save.error) return save;
+
+  const promo = offer.promo_code == null ? null : String(offer.promo_code).trim() || null;
+  const cleaned = {
+    store_id: store.value,
+    discount_percent: percent.value,
+    discount_flat_pkr: flat.value,
+    cap_pkr: cap.value,
+    min_order_pkr: min.value,
+    promo_code: promo,
+    estimated_save_pkr: save.value,
+  };
+  const hasAny = Object.values(cleaned).some((value) => value != null);
+  return { offer: hasAny ? cleaned : null };
+}
+
+function productsFromBody(products) {
+  if (products == null || products === '') return { products: [] };
+  if (!Array.isArray(products)) return { error: 'products must be an array.' };
+  const cleaned = [];
+  for (const row of products) {
+    const title = String(row?.title || row?.name || '').trim();
+    let url = null;
+    try {
+      url = normalizeProductUrl(row?.product_url || row?.url);
+    } catch (err) {
+      return { error: err.message };
+    }
+    const note = String(row?.note || '').trim() || null;
+    const qty = Number(row?.qty);
+    if (!title && !url && note) {
+      return { error: 'Add a name or a link for the product with a note.' };
+    }
+    if (!title && !url) continue;
+    cleaned.push({
+      title: title || null,
+      product_url: url,
+      note,
+      qty: Number.isInteger(qty) && qty >= 1 ? Math.min(qty, 99) : 1,
+    });
+  }
+  return { products: cleaned };
+}
+
 // POST /api/requester/requests
 // One order, one row per selected person, same order_group_id.
-// holders: [{ card_holder_id, card_id }]
+// holders: [{ card_holder_id, card_id }] (max 5)
+// offer: optional Peekaboo snapshot from Apply. Omit for By card.
 const createRequest = async (req, res) => {
   const requester_id = req.user.id;
   const {
@@ -72,11 +150,17 @@ const createRequest = async (req, res) => {
     delivery_address,
     order_amount,
     note,
+    offer,
+    products,
   } = req.body;
 
   const parsedHolders = holdersFromBody(holders);
   if (parsedHolders.error) {
     return res.status(400).json({ error: parsedHolders.error });
+  }
+  const parsedOffer = offerFromBody(offer);
+  if (parsedOffer.error) {
+    return res.status(400).json({ error: parsedOffer.error });
   }
   if (!merchant || String(merchant).trim() === '') {
     return res.status(400).json({ error: 'merchant is required.' });
@@ -92,16 +176,23 @@ const createRequest = async (req, res) => {
     });
   }
 
+  const parsedProducts = productsFromBody(products);
+  if (parsedProducts.error) {
+    return res.status(400).json({ error: parsedProducts.error });
+  }
+
   let productLink = null;
   try {
-    productLink = normalizeProductUrl(product_url);
+    productLink = normalizeProductUrl(product_url)
+      || parsedProducts.products.find((item) => item.product_url)?.product_url
+      || null;
   } catch (err) {
     return res.status(400).json({ error: err.message });
   }
 
   try {
     const { rows } = await db.query(
-      `SELECT create_request($1, $2, $3, $4, $5, $6, $7::json) AS result`,
+      `SELECT create_request($1, $2, $3, $4, $5, $6, $7::json, $8::json, $9::json) AS result`,
       [
         requester_id,
         String(merchant).trim(),
@@ -110,6 +201,8 @@ const createRequest = async (req, res) => {
         amount,
         note ? String(note).trim() : null,
         JSON.stringify(parsedHolders.holders),
+        parsedOffer.offer ? JSON.stringify(parsedOffer.offer) : null,
+        JSON.stringify(parsedProducts.products),
       ]
     );
     res.status(201).json(rows[0].result);
@@ -254,10 +347,61 @@ const getTransactionHistory = async (req, res) => {
   }
 };
 
+const getOrderGroup = async (req, res) => {
+  const groupId = String(req.params.groupId || '').trim();
+  if (!groupId) return res.status(400).json({ error: 'Group id is required.' });
+  try {
+    const { rows } = await db.query(
+      'SELECT get_order_group_requester($1, $2) AS result',
+      [groupId, req.user.id]
+    );
+    res.json(rows[0].result ?? {});
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
+const chooseBroadcastHolder = async (req, res) => {
+  const groupId = String(req.params.groupId || '').trim();
+  const holderId = String(req.body?.card_holder_id || '').trim();
+  if (!groupId) return res.status(400).json({ error: 'Group id is required.' });
+  if (!holderId) return res.status(400).json({ error: 'card_holder_id is required.' });
+  try {
+    const { rows } = await db.query(
+      'SELECT choose_broadcast_holder($1, $2, $3) AS result',
+      [groupId, req.user.id, holderId]
+    );
+    res.json(rows[0].result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
+const replaceProducts = async (req, res) => {
+  const groupId = String(req.params.groupId || '').trim();
+  if (!groupId) return res.status(400).json({ error: 'Group id is required.' });
+  const parsedProducts = productsFromBody(req.body?.products);
+  if (parsedProducts.error) {
+    return res.status(400).json({ error: parsedProducts.error });
+  }
+  try {
+    const { rows } = await db.query(
+      'SELECT replace_request_products($1, $2, $3::json) AS result',
+      [groupId, req.user.id, JSON.stringify(parsedProducts.products)]
+    );
+    res.json(rows[0].result ?? []);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
 module.exports = {
   createRequest,
   getActiveRequests,
   getRequest,
+  getOrderGroup,
+  chooseBroadcastHolder,
+  replaceProducts,
   cancelRequest,
   acceptProof,
   rejectProof,

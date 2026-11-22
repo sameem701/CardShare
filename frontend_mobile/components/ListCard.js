@@ -32,7 +32,11 @@ export default function ListCard({ title, subtitle, badgeLabel, badgeVariant, ac
   if (onPress) {
     return (
       <Pressable
-        style={({ pressed }) => [styles.card, pressed && styles.pressed]}
+        style={({ pressed }) => [
+          styles.card,
+          pressed && styles.pressed,
+          pressed && { transform: [{ scale: theme.motion.press }] },
+        ]}
         onPress={onPress}
         accessibilityRole="button"
         accessibilityLabel={label}
@@ -66,7 +70,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.green,
   },
   pressed: {
-    opacity: 0.9,
+    backgroundColor: theme.colors.bg3,
   },
   row: {
     flexDirection: 'row',
@@ -91,7 +95,7 @@ const styles = StyleSheet.create({
     height: 22,
     paddingHorizontal: 6,
     borderRadius: 11,
-    backgroundColor: theme.colors.red,
+    backgroundColor: theme.colors.green,
     alignItems: 'center',
     justifyContent: 'center',
   },

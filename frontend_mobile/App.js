@@ -9,7 +9,9 @@ import theme from './constants/theme';
 import { ChatProvider } from './context/ChatCache';
 import { SessionProvider, useSession } from './context/SessionContext';
 import { ToastProvider } from './context/ToastContext';
+import { RoleModeProvider } from './context/RoleMode';
 import MainApp from './navigation/MainApp';
+import OnboardingTour from './screens/onboarding/OnboardingTour';
 import { queryClient } from './queries/client';
 import './queries/focus';
 import LoadingState from './components/LoadingState';
@@ -21,8 +23,9 @@ import NameScreen from './screens/NameScreen';
 import InviteLandingScreen from './screens/InviteLandingScreen';
 import InviteAttachScreen from './screens/InviteAttachScreen';
 import { installWebChrome } from './utils/webChrome';
-import { clearPendingInviteCode, getPendingInviteCode, usePendingInviteCode } from './utils/inviteHold';
+import { clearPendingInviteCode, usePendingInviteCode } from './utils/inviteHold';
 import { listenForInviteLinks } from './utils/inviteLink';
+import { readOnboardingTour } from './utils/onboardingTour';
 
 const hasFinishedSetup = (user) =>
   Boolean(
@@ -36,13 +39,13 @@ function AuthGate() {
   const { session, booting, signIn, signOut } = useSession();
   const [authScreen, setAuthScreen] = useState('start');
   const [phoneBack, setPhoneBack] = useState('start');
-  const [howStep, setHowStep] = useState(0);
   const [phone, setPhone] = useState('');
   const [devOtp, setDevOtp] = useState('');
   const [awaitingAttach, setAwaitingAttach] = useState(false);
   const [inviteHandoff, setInviteHandoff] = useState(null);
   const pendingInvite = usePendingInviteCode();
   const startedWithoutName = useRef(false);
+  const [tourPending, setTourPending] = useState(null);
 
   useEffect(() => {
     let stop;
@@ -56,6 +59,20 @@ function AuthGate() {
     if (session || !pendingInvite) return;
     if (authScreen === 'start') setAuthScreen('invitee');
   }, [authScreen, pendingInvite, session]);
+
+  useEffect(() => {
+    if (!session?.user?.id || !hasFinishedSetup(session.user)) {
+      setTourPending(null);
+      return undefined;
+    }
+    let live = true;
+    readOnboardingTour(session.user.id).then((status) => {
+      if (live) setTourPending(status === 'pending');
+    });
+    return () => {
+      live = false;
+    };
+  }, [session]);
 
   const onHandoffInvite = useCallback((result) => {
     setAwaitingAttach(false);
@@ -80,11 +97,26 @@ function AuthGate() {
         />
       );
     }
+    if (tourPending === null) {
+      return <LoadingState message="Starting…" />;
+    }
+    if (tourPending) {
+      return (
+        <OnboardingTour
+          inviteCode={pendingInvite}
+          onDone={() => {
+            clearPendingInviteCode();
+            setTourPending(false);
+          }}
+        />
+      );
+    }
     return (
       <MainApp
         onLoggedOut={() => {
           setAwaitingAttach(false);
           startedWithoutName.current = false;
+          setTourPending(null);
           setAuthScreen('start');
         }}
         inviteHandoff={inviteHandoff}
@@ -103,9 +135,7 @@ function AuthGate() {
           setAuthScreen('start');
           signOut();
         }}
-        onSaved={() => {
-          if (startedWithoutName.current && getPendingInviteCode()) setAwaitingAttach(true);
-        }}
+        onSaved={() => {}}
       />
     );
   }
@@ -113,8 +143,6 @@ function AuthGate() {
   if (authScreen === 'how') {
     return (
       <HowItWorksScreen
-        step={howStep}
-        onStep={setHowStep}
         onBack={() => setAuthScreen(phoneBack === 'invitee' ? 'invitee' : 'start')}
         onContinue={() => {
           setPhoneBack('how');
@@ -155,7 +183,6 @@ function AuthGate() {
       <InviteLandingScreen
         code={pendingInvite}
         onGetStarted={() => {
-          setHowStep(0);
           setPhoneBack('invitee');
           setAuthScreen('how');
         }}
@@ -174,7 +201,6 @@ function AuthGate() {
   return (
     <StartScreen
       onGetStarted={() => {
-        setHowStep(0);
         setAuthScreen('how');
       }}
       onExistingAccount={() => {
@@ -208,14 +234,16 @@ export default function App() {
           <QueryClientProvider client={queryClient}>
           <ToastProvider>
             <SessionProvider onRequireLogin={() => setLoginKey((k) => k + 1)} key={loginKey}>
-              <ChatProvider>
-                <AuthGate />
-              </ChatProvider>
+              <RoleModeProvider>
+                <ChatProvider>
+                  <AuthGate />
+                </ChatProvider>
+              </RoleModeProvider>
             </SessionProvider>
           </ToastProvider>
         </QueryClientProvider>
         </View>
-        <StatusBar style="dark" />
+        <StatusBar style="light" />
       </View>
     </SafeAreaProvider>
   );
@@ -224,7 +252,7 @@ export default function App() {
 const styles = StyleSheet.create({
   page: {
     flex: 1,
-    backgroundColor: theme.colors.bg,
+    backgroundColor: theme.colors.page,
     alignItems: 'center',
     minHeight: Platform.OS === 'web' ? '100vh' : undefined,
   },

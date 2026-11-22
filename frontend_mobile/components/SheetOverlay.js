@@ -1,13 +1,16 @@
 import { Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import theme from '../constants/theme';
+import Chrome from './Chrome';
 
 export default function SheetOverlay({ visible, onClose, children }) {
   if (!visible) return null;
 
   const body = (
     <Pressable style={styles.backdrop} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close">
-      <Pressable style={styles.sheet} onPress={(event) => event.stopPropagation()}>
-        {children}
+      <Pressable onPress={(event) => event.stopPropagation()}>
+        <Chrome strong style={styles.sheet}>
+          {children}
+        </Chrome>
       </Pressable>
     </Pressable>
   );
@@ -41,9 +44,10 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   sheet: {
-    backgroundColor: theme.colors.bg2,
     borderTopLeftRadius: theme.radius.sheet,
     borderTopRightRadius: theme.radius.sheet,
+    borderTopWidth: 1,
+    borderColor: theme.colors.border2,
     padding: theme.layout.screenPadding,
     paddingBottom: theme.spacing.xxl,
   },

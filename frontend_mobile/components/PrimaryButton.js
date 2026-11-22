@@ -14,6 +14,7 @@ export default function PrimaryButton({ label, count, onPress, disabled, loading
         compact && styles.compact,
         danger && styles.danger,
         pressed && !disabled && (danger ? styles.dangerPressed : styles.pressed),
+        pressed && !disabled && { transform: [{ scale: theme.motion.press }] },
         (disabled || loading) && styles.disabled,
       ]}
       onPress={onPress}
@@ -44,14 +45,12 @@ const styles = StyleSheet.create({
   },
   pressed: {
     backgroundColor: theme.colors.greenDark,
-    transform: [{ scale: 0.98 }],
   },
   danger: {
     backgroundColor: theme.colors.red,
   },
   dangerPressed: {
     backgroundColor: '#E04444',
-    transform: [{ scale: 0.98 }],
   },
   dangerText: {
     color: theme.colors.white,

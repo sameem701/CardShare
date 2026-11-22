@@ -129,14 +129,14 @@ export default function SendProofScreen() {
             <Text style={styles.pickerHint}>{asset ? 'Tap to change it' : 'Show the amount you paid'}</Text>
           </Pressable>
 
-          <Text style={styles.label}>Price without the card (PKR)</Text>
+          <Text style={styles.label}>Original Price (Total)</Text>
           <TextField
             value={original}
             onChangeText={change(setOriginal)}
-            placeholder="Price without the card (PKR)"
+            placeholder="Original Price (Total)"
             keyboardType="number-pad"
           />
-          <Text style={styles.label}>Paid on card (PKR)</Text>
+          <Text style={styles.label}>Discounted Price (Total)</Text>
           <TextField
             value={paid}
             onChangeText={change(setPaid)}

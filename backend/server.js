@@ -51,6 +51,7 @@ app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/onboarding', require('./routes/onboarding.routes'));
 app.use('/api/profile', require('./routes/profile.routes'));
 app.use('/api/cards', require('./routes/cards.routes'));
+app.use('/api/stores', require('./routes/stores.routes'));
 app.use('/api/circle', require('./routes/circle.routes'));
 app.use('/api/requester', require('./routes/requester.routes'));
 app.use('/api/holder', require('./routes/holder.routes'));

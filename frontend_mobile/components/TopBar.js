@@ -3,6 +3,7 @@ import Svg, { Path } from 'react-native-svg';
 import theme from '../constants/theme';
 import { useTopInset } from '../hooks/useTopInset';
 import { initialsFor } from '../utils/initials';
+import Chrome from './Chrome';
 
 export function BackIcon() {
   return (
@@ -15,9 +16,14 @@ export function BackIcon() {
 export default function TopBar({ title, displayName, onBack, onAccount, actionLabel, onAction, right, compactTitle }) {
   const topInset = useTopInset();
   return (
-    <View style={[styles.bar, { paddingTop: topInset }]}>
+    <Chrome style={[styles.bar, { paddingTop: topInset }]}>
       {onBack ? (
-        <Pressable onPress={onBack} style={styles.backBtn} accessibilityRole="button" accessibilityLabel="Back">
+        <Pressable
+          onPress={onBack}
+          style={({ pressed }) => [styles.backBtn, pressed && styles.iconPressed]}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+        >
           <BackIcon />
         </Pressable>
       ) : null}
@@ -45,7 +51,7 @@ export default function TopBar({ title, displayName, onBack, onAccount, actionLa
           <View style={styles.spacer} />
         ) : null}
       </View>
-    </View>
+    </Chrome>
   );
 }
 
@@ -56,8 +62,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.md,
-    backgroundColor: theme.colors.bg,
-    zIndex: 2,
+    zIndex: 5,
+  },
+  iconPressed: {
+    transform: [{ scale: theme.motion.pressIcon }],
+    opacity: 0.72,
   },
   title: {
     flex: 1,

@@ -6,6 +6,7 @@ function targetKey(params = {}) {
   if (params.txnId) return `txn:${params.txnId}:${params.role || ''}`;
   if (params.role) return `role:${params.role}`;
   if (params.inviterId) return `invite:${params.inviterId}`;
+  if (params.groupId) return `group:${params.groupId}`;
   return 'one';
 }
 
@@ -17,7 +18,7 @@ function findStack(navigation) {
   let current = navigation;
   while (current) {
     const names = current.getState?.()?.routeNames;
-    if (names?.includes('order')) return current;
+    if (names?.includes('order') || names?.includes('broadcast')) return current;
     current = current.getParent?.();
   }
   return navigation;

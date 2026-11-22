@@ -12,6 +12,7 @@ router.get('/incoming', controller.getIncomingRequests);
 router.get('/orders', controller.getActiveOrders);
 router.get('/orders/:id', controller.getOrder);
 router.post('/orders/:id/accept', controller.acceptRequest);
+router.post('/orders/:id/available', controller.markAvailable);
 router.post('/orders/:id/decline', controller.declineRequest);
 router.post('/orders/:id/screenshot/upload-url', controller.getScreenshotUploadUrl);
 router.post('/orders/:id/proof', controller.submitProof);

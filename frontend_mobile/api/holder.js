@@ -12,6 +12,14 @@ export function getOrder(sessionId, userId, orderId, options = {}) {
   return apiRequest(`/api/holder/orders/${orderId}`, { sessionId, userId, signal: options.signal });
 }
 
+export function markAvailable(sessionId, userId, orderId) {
+  return apiRequest(`/api/holder/orders/${orderId}/available`, {
+    method: 'POST',
+    sessionId,
+    userId,
+  });
+}
+
 export function acceptOrder(sessionId, userId, orderId) {
   return apiRequest(`/api/holder/orders/${orderId}/accept`, {
     method: 'POST',

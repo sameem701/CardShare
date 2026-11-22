@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { ALLOWED_BANKS, ALLOWED_CARD_TIERS } from '../api/cards';
+import { getBanks, getTiers } from '../api/cards';
 import { getCardHolders, getCircle } from '../api/circle';
 import { createRequest } from '../api/requester';
 import Dropdown from '../components/Dropdown';
@@ -10,42 +10,54 @@ import ErrorBanner from '../components/ErrorBanner';
 import HolderPicker from '../components/HolderPicker';
 import LoadingState from '../components/LoadingState';
 import PrimaryButton from '../components/PrimaryButton';
+import ProductRows from '../components/ProductRows';
 import ScreenShell from '../components/ScreenShell';
 import TextField from '../components/TextField';
 import TopBar from '../components/TopBar';
 import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
 import { useToast } from '../context/ToastContext';
-import { openCircle, openRequests } from '../navigation/openScreen';
+import { openCircle, openScreen } from '../navigation/openScreen';
 import { queryClient } from '../queries/client';
 import { useScreenQuery } from '../queries/useScreenQuery';
 import { asList } from '../utils/format';
 import { parseWholePkr, wholePkrFromInput } from '../utils/money';
-import { productUrlError } from '../utils/productUrl';
+import { blankProduct, cleanProductRows } from '../utils/products';
+
+const MAX_ASK = 5;
 
 export default function CreateRequestScreen() {
   const navigation = useNavigation();
   const { sessionId, user } = useSession();
   const showToast = useToast();
-  // "Request card" on a circle member opens this with that card already chosen.
   const preset = useRoute().params || {};
+  const findPeople = asList(preset.findPeople);
   const [bank, setBank] = useState(preset.bank || '');
   const [tier, setTier] = useState(preset.tier || '');
-  const [presetActive, setPresetActive] = useState(Boolean(preset.holderId));
+  const [presetActive, setPresetActive] = useState(Boolean(preset.holderId || findPeople.length));
   const [selectedIds, setSelectedIds] = useState([]);
   const [appliedKey, setAppliedKey] = useState('');
   const [liveHolderIds, setLiveHolderIds] = useState([]);
-  const [merchant, setMerchant] = useState('');
+  const [merchant, setMerchant] = useState(preset.merchant || '');
   const [address, setAddress] = useState('');
-  const [productUrl, setProductUrl] = useState('');
+  const [products, setProducts] = useState([blankProduct(preset.productUrl || '')]);
   const [note, setNote] = useState('');
-  const [amount, setAmount] = useState('');
+  const [amount, setAmount] = useState(preset.amount ? String(preset.amount) : '');
   const [submitting, setSubmitting] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [offer, setOffer] = useState(preset.offer || null);
 
   const friendsQuery = useScreenQuery(
     ['circle', user?.id],
     async ({ signal }) => asList(await getCircle(sessionId, user.id, { signal }))
+  );
+  const banksQuery = useScreenQuery(
+    ['banks'],
+    async ({ signal }) => asList(await getBanks(sessionId, user.id, { signal }))
+  );
+  const tiersQuery = useScreenQuery(
+    ['tiers'],
+    async ({ signal }) => asList(await getTiers(sessionId, user.id, { signal }))
   );
   const holdersQuery = useScreenQuery(
     ['card-holders', user?.id, bank, tier],
@@ -54,12 +66,31 @@ export default function CreateRequestScreen() {
   );
   const friends = (friendsQuery.data || []).filter((member) => member.c_status === 'accepted');
   const matchKey = bank && tier ? `${bank}\u0000${tier}` : '';
-  const people = matchKey && holdersQuery.data ? personOptions(holdersQuery.data) : [];
-  const loadError = friendsQuery.errorMessage || holdersQuery.errorMessage;
+  const people = presetActive && findPeople.length
+    ? findPeople.map((person) => ({
+      id: person.id,
+      label: person.label || person.id,
+      card_id: person.card_id,
+      offer: person.offer,
+    }))
+    : (matchKey && holdersQuery.data ? personOptions(holdersQuery.data) : []);
+  const banks = banksQuery.data || [];
+  const tiers = tiersQuery.data || [];
+  const loadError = friendsQuery.errorMessage || holdersQuery.errorMessage
+    || banksQuery.errorMessage || tiersQuery.errorMessage;
   const liveOrder = actionError.startsWith('You already have a live order with ') && liveHolderIds.length > 0;
   const error = liveOrder ? '' : (actionError || loadError);
+  const chosen = people.filter((person) => selectedIds.includes(person.id));
+  const showBankFields = !(presetActive && findPeople.length);
 
   useEffect(() => {
+    if (presetActive && findPeople.length) {
+      const key = matchKey || 'find';
+      if (appliedKey === key) return;
+      setSelectedIds(findPeople.map((person) => person.id).slice(0, MAX_ASK));
+      setAppliedKey(key);
+      return;
+    }
     if (!matchKey) {
       setSelectedIds([]);
       setAppliedKey('');
@@ -68,9 +99,10 @@ export default function CreateRequestScreen() {
     if (holdersQuery.data === undefined) return;
     if (appliedKey === matchKey) return;
     const onlyThem = presetActive && holdersQuery.data.some((person) => person.id === preset.holderId);
-    setSelectedIds(onlyThem ? [preset.holderId] : holdersQuery.data.map((person) => person.id));
+    const ids = onlyThem ? [preset.holderId] : holdersQuery.data.map((person) => person.id);
+    setSelectedIds(ids.slice(0, MAX_ASK));
     setAppliedKey(matchKey);
-  }, [matchKey, holdersQuery.data, appliedKey, presetActive, preset.holderId]);
+  }, [matchKey, holdersQuery.data, appliedKey, presetActive, preset.holderId, findPeople]);
 
   const clearLiveOrder = () => {
     setLiveHolderIds([]);
@@ -88,6 +120,7 @@ export default function CreateRequestScreen() {
 
   const onBank = (value) => {
     setPresetActive(false);
+    setOffer(null);
     setBank(value);
     setSelectedIds([]);
     setAppliedKey('');
@@ -96,6 +129,7 @@ export default function CreateRequestScreen() {
 
   const onTier = (value) => {
     setPresetActive(false);
+    setOffer(null);
     setTier(value);
     setSelectedIds([]);
     setAppliedKey('');
@@ -104,32 +138,29 @@ export default function CreateRequestScreen() {
 
   const onTogglePerson = (id) => {
     clearLiveOrder();
-    setSelectedIds((current) => (
-      current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
-    ));
-  };
-
-  const onUnselectAll = () => {
-    clearLiveOrder();
-    setSelectedIds([]);
-  };
-
-  const onUnselectLive = () => {
-    const drop = new Set(liveHolderIds);
-    setSelectedIds((current) => current.filter((id) => !drop.has(id)));
-    setLiveHolderIds([]);
-    setActionError('');
+    setSelectedIds((current) => {
+      if (current.includes(id)) return current.filter((item) => item !== id);
+      if (current.length >= MAX_ASK) {
+        setActionError('Ask up to 5 people.');
+        return current;
+      }
+      setActionError('');
+      return [...current, id];
+    });
   };
 
   const submit = async () => {
     const parsed = parseWholePkr(amount);
-    const chosen = people.filter((person) => selectedIds.includes(person.id));
-    if (!bank || !tier) {
+    if (showBankFields && (!bank || !tier)) {
       setActionError('Choose a bank and a tier.');
       return;
     }
     if (!chosen.length) {
       setActionError('Choose at least one person.');
+      return;
+    }
+    if (chosen.length > MAX_ASK) {
+      setActionError('Ask up to 5 people.');
       return;
     }
     if (!merchant.trim()) {
@@ -144,32 +175,43 @@ export default function CreateRequestScreen() {
       setActionError('Order amount must be a whole number greater than 100 PKR.');
       return;
     }
-    const linkError = productUrlError(productUrl);
-    if (linkError) {
-      setActionError(linkError);
+    const parsedProducts = cleanProductRows(products);
+    if (parsedProducts.error) {
+      setActionError(parsedProducts.error);
       return;
     }
+    const cleanedProducts = parsedProducts.products;
 
     setSubmitting(true);
     setActionError('');
     setLiveHolderIds([]);
     try {
+      const snapshot = offer || chosen[0]?.offer || null;
       const created = await createRequest(sessionId, user.id, {
         holders: chosen.map((person) => ({
           card_holder_id: person.id,
-          card_id: presetActive && person.id === preset.holderId && preset.cardId ? preset.cardId : person.card_id,
+          card_id: (presetActive && findPeople.find((item) => item.id === person.id)?.card_id)
+            || (presetActive && person.id === preset.holderId && preset.cardId)
+            || person.card_id,
         })),
         merchant: merchant.trim(),
         delivery_address: address.trim(),
-        product_url: productUrl.trim() || null,
+        product_url: cleanedProducts[0]?.product_url || null,
         order_amount: parsed,
         note: note.trim() || null,
+        products: cleanedProducts,
+        ...(snapshot ? { offer: snapshot } : {}),
       });
-      const count = Array.isArray(created) ? created.length : 1;
+      const list = Array.isArray(created) ? created : [created];
+      const count = list.length;
       showToast(count > 1 ? 'Requests sent' : 'Request sent');
       await queryClient.invalidateQueries({ queryKey: ['inbox', user.id] });
       await queryClient.invalidateQueries({ queryKey: ['home', user.id] });
-      openRequests(navigation);
+      if (count > 1 && list[0]?.order_group_id) {
+        openScreen(navigation, 'broadcast', { groupId: list[0].order_group_id }, { replace: true });
+      } else if (list[0]?.id) {
+        openScreen(navigation, 'order', { requestId: list[0].id }, { replace: true });
+      }
     } catch (err) {
       const ids = Array.isArray(err.payload?.holder_ids) ? err.payload.holder_ids : [];
       setLiveHolderIds(ids);
@@ -180,9 +222,13 @@ export default function CreateRequestScreen() {
   };
 
   let peopleSummary = '';
-  let peoplePlaceholder = 'Choose a bank and tier';
+  let peoplePlaceholder = 'Choose a bank and a tier';
   let peopleDisabled = !bank || !tier;
-  if (bank && tier) {
+  if (presetActive && findPeople.length) {
+    peopleDisabled = false;
+    if (selectedIds.length === 0) peopleSummary = 'None selected';
+    else peopleSummary = selectedIds.length === 1 ? '1 selected' : `${selectedIds.length} selected`;
+  } else if (bank && tier) {
     if (holdersQuery.showLoading) {
       peoplePlaceholder = 'Loading…';
       peopleDisabled = true;
@@ -198,6 +244,10 @@ export default function CreateRequestScreen() {
     }
   }
 
+  const sendLabel = chosen.length <= 1
+    ? (chosen[0] ? `Send to ${String(chosen[0].label || '').split(/\s+/)[0]}` : 'Send')
+    : `Send to ${chosen.length} people`;
+
   return (
     <ScreenShell
       onRefresh={() => {
@@ -206,7 +256,29 @@ export default function CreateRequestScreen() {
       }}
       refreshing={friendsQuery.refreshing || holdersQuery.refreshing}
     >
-      <TopBar title="Request order" onBack={() => navigation.goBack()} />
+      <TopBar
+        title="Request details"
+        onBack={() => navigation.goBack()}
+        right={(
+          <Pressable
+            onPress={() => {
+              setMerchant('Daraz');
+              setAmount('12000');
+              setAddress('House 12, Street 4, DHA Phase 6, Karachi');
+              setNote('Please pack carefully and include the receipt');
+              setProducts([
+                { ...blankProduct('', false), title: 'Nike Air Max 90', url: 'https://www.daraz.pk/products/nike-air-max-90-i1234', qty: 1 },
+                { ...blankProduct('', false), title: 'Phone case', qty: 2, note: 'Black, matte finish' },
+                { ...blankProduct('', false), title: 'Screen protector', url: 'https://www.daraz.pk/products/glass-protector', qty: 1, note: 'Size for iPhone 15' },
+              ]);
+            }}
+            style={styles.ghost}
+            accessibilityRole="button"
+          >
+            <Text style={styles.ghostText}>Test data</Text>
+          </Pressable>
+        )}
+      />
       {friendsQuery.showLoading ? (
         <LoadingState />
       ) : friends.length === 0 && !friendsQuery.errorMessage ? (
@@ -218,38 +290,77 @@ export default function CreateRequestScreen() {
         </View>
       ) : (
         <View style={styles.pad}>
-          <Text style={styles.hint}>
-            Pick a bank and tier. Everyone in your circle who shares that card starts selected. The first to accept places the order. The amount is the price without the card, delivery included. After proof, you pay the card charge plus 20% of the discount.
-          </Text>
-          <Dropdown label="Bank" placeholder="Choose a bank" options={ALLOWED_BANKS} value={bank} onChange={onBank} />
-          <Dropdown label="Tier" placeholder="Choose a tier" options={ALLOWED_CARD_TIERS} value={tier} onChange={onTier} />
-          <HolderPicker
-            label="People"
-            placeholder={peoplePlaceholder}
-            summary={peopleSummary}
-            people={people}
-            selectedIds={selectedIds}
-            onToggle={onTogglePerson}
-            onUnselectAll={onUnselectAll}
-            disabled={peopleDisabled}
-          />
+          <Text style={styles.kicker}>To</Text>
+          <View style={styles.chips}>
+            {chosen.map((person) => (
+              <Pressable
+                key={person.id}
+                onPress={() => onTogglePerson(person.id)}
+                style={styles.chip}
+                accessibilityRole="button"
+                accessibilityLabel={`Remove ${person.label}`}
+              >
+                <Text style={styles.chipText}>{person.label}</Text>
+                <Text style={styles.chipX}>×</Text>
+              </Pressable>
+            ))}
+          </View>
+          {showBankFields ? (
+            <>
+              <Dropdown label="Bank" placeholder="Choose a bank" options={banks} value={bank} onChange={onBank} />
+              <Dropdown label="Tier" placeholder="Choose a tier" options={tiers} value={tier} onChange={onTier} />
+              <HolderPicker
+                label="People"
+                placeholder={peoplePlaceholder}
+                summary={peopleSummary}
+                people={people}
+                selectedIds={selectedIds}
+                onToggle={onTogglePerson}
+                onUnselectAll={() => { clearLiveOrder(); setSelectedIds([]); }}
+                disabled={peopleDisabled}
+              />
+            </>
+          ) : (
+            <HolderPicker
+              label="People"
+              placeholder={peoplePlaceholder}
+              summary={peopleSummary}
+              people={people}
+              selectedIds={selectedIds}
+              onToggle={onTogglePerson}
+              onUnselectAll={() => { clearLiveOrder(); setSelectedIds([]); }}
+              disabled={peopleDisabled}
+            />
+          )}
           <Field label="Merchant" value={merchant} onChangeText={setMerchant} placeholder="e.g. Daraz" />
+          <Field
+            label="Price without a card (PKR)"
+            value={amount}
+            onChangeText={onChangeAmount}
+            placeholder="e.g. 8500"
+            keyboardType="number-pad"
+          />
           <Field label="Delivery address" value={address} onChangeText={setAddress} placeholder="Full address" multiline />
-          <Field label="Product URL (optional)" value={productUrl} onChangeText={setProductUrl} placeholder="https://" />
-          <Field label="Price without the card (PKR)" value={amount} onChangeText={onChangeAmount} placeholder="e.g. 2500" keyboardType="number-pad" />
-          <Field label="Note (optional)" value={note} onChangeText={setNote} placeholder="Anything they should know" />
+          <Text style={styles.label}>Products</Text>
+          <ProductRows products={products} onChange={setProducts} />
+          <Field label="Notes" value={note} onChangeText={setNote} placeholder="Optional" />
           {liveOrder ? (
             <View style={styles.liveRow}>
               <Text style={styles.liveText}>{actionError}</Text>
-              <Pressable onPress={onUnselectLive} accessibilityRole="button" accessibilityLabel="Unselect them">
+              <Pressable onPress={() => {
+                const drop = new Set(liveHolderIds);
+                setSelectedIds((current) => current.filter((id) => !drop.has(id)));
+                setLiveHolderIds([]);
+                setActionError('');
+              }} accessibilityRole="button" accessibilityLabel="Unselect them">
                 <Text style={styles.liveAction}>Unselect them</Text>
               </Pressable>
             </View>
           ) : (
-            <ErrorBanner message={error} onRetry={friends.length === 0 ? () => friendsQuery.refetch() : undefined} />
+            <ErrorBanner message={error} />
           )}
           <PrimaryButton
-            label="Start order"
+            label={sendLabel}
             loading={submitting}
             disabled={selectedIds.length === 0}
             onPress={submit}
@@ -287,12 +398,40 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.layout.screenPadding,
     paddingBottom: theme.spacing.xxl,
   },
-  hint: {
-    fontFamily: theme.fonts.body,
-    fontSize: theme.fontSize.body,
-    color: theme.colors.text2,
-    lineHeight: 22,
+  kicker: {
+    fontFamily: theme.fonts.bodyMedium,
+    fontSize: theme.fontSize.small,
+    color: theme.colors.text3,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: theme.spacing.sm,
+  },
+  chips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
     marginBottom: theme.spacing.lg,
+  },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: theme.colors.bg2,
+    borderRadius: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.border2,
+  },
+  chipText: {
+    fontFamily: theme.fonts.bodyMedium,
+    fontSize: theme.fontSize.body,
+    color: theme.colors.text,
+  },
+  chipX: {
+    fontFamily: theme.fonts.body,
+    fontSize: 16,
+    color: theme.colors.text3,
   },
   link: {
     fontFamily: theme.fonts.bodyMedium,
@@ -310,6 +449,18 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: theme.spacing.sm,
+  },
+  ghost: {
+    borderWidth: 1,
+    borderColor: theme.colors.border2,
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+  },
+  ghostText: {
+    fontFamily: theme.fonts.bodyMedium,
+    fontSize: 13,
+    color: theme.colors.text2,
   },
   liveRow: {
     flexDirection: 'row',

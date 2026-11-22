@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { BackHandler, Platform, View } from 'react-native';
-import { DefaultTheme, NavigationContainer, useNavigation, useNavigationContainerRef } from '@react-navigation/native';
+import { DarkTheme, NavigationContainer, useNavigation, useNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import BottomNav from '../components/BottomNav';
+import NeedsYou from '../components/NeedsYou';
 import SideMenu from '../components/SideMenu';
 import AddCardScreen from '../screens/AddCardScreen';
 import AddCircleScreen from '../screens/AddCircleScreen';
 import ChatScreen from '../screens/ChatScreen';
 import CircleScreen from '../screens/CircleScreen';
+import BroadcastStatusScreen from '../screens/BroadcastStatusScreen';
 import CreateRequestScreen from '../screens/CreateRequestScreen';
 import MyCardsScreen from '../screens/MyCardsScreen';
 import HistoryListScreen from '../screens/HistoryListScreen';
@@ -18,8 +20,8 @@ import HowItWorksScreen from '../screens/HowItWorksScreen';
 import OrderScreen from '../screens/OrderScreen';
 import RequestsScreen from '../screens/RequestsScreen';
 import SendProofScreen from '../screens/SendProofScreen';
+import SettingsScreen from '../screens/SettingsScreen';
 import theme from '../constants/theme';
-import { RoleModeProvider } from '../context/RoleMode';
 import { AppActionsProvider } from './AppActions';
 import { screenId } from './openScreen';
 import { useSession } from '../context/SessionContext';
@@ -28,11 +30,14 @@ import { clearPendingInviteCode, usePendingInviteCode } from '../utils/inviteHol
 import { applyInviteResolution, resolveAndApply } from '../utils/inviteLink';
 
 const navigationTheme = {
-  ...DefaultTheme,
+  ...DarkTheme,
   colors: {
-    ...DefaultTheme.colors,
+    ...DarkTheme.colors,
     background: theme.colors.bg,
     card: theme.colors.bg,
+    text: theme.colors.text,
+    border: theme.colors.border,
+    primary: theme.colors.green,
   },
 };
 
@@ -64,21 +69,8 @@ function MainTabs() {
 
 function GuideScreen() {
   const navigation = useNavigation();
-  const [step, setStep] = useState(0);
-
-  useEffect(() => {
-    const unsubscribe = navigation.addListener('beforeRemove', (event) => {
-      if (step === 0) return;
-      event.preventDefault();
-      setStep((current) => (current > 0 ? current - 1 : 0));
-    });
-    return unsubscribe;
-  }, [navigation, step]);
-
   return (
     <HowItWorksScreen
-      step={step}
-      onStep={setStep}
       finishLabel="Done"
       onBack={() => navigation.goBack()}
       onContinue={() => navigation.goBack()}
@@ -137,7 +129,6 @@ function MainAppShell({ onLoggedOut, inviteHandoff, onInviteHandoffDone }) {
   }, [menuOpen]);
 
   return (
-    <RoleModeProvider>
     <AppActionsProvider value={{ openMenu: () => setMenuOpen(true), onLoggedOut }}>
       <View style={{ flex: 1 }}>
         <NavigationContainer
@@ -156,8 +147,10 @@ function MainAppShell({ onLoggedOut, inviteHandoff, onInviteHandoffDone }) {
             <Stack.Screen name="circle" component={CircleScreen} getId={screenId} />
             <Stack.Screen name="my-cards" component={MyCardsScreen} getId={screenId} />
             <Stack.Screen name="create-request" component={CreateRequestScreen} getId={screenId} />
+            <Stack.Screen name="broadcast" component={BroadcastStatusScreen} getId={screenId} />
             <Stack.Screen name="history" component={HistoryScreen} getId={screenId} />
             <Stack.Screen name="history-list" component={HistoryListScreen} getId={screenId} />
+            <Stack.Screen name="settings" component={SettingsScreen} getId={screenId} />
             <Stack.Screen name="order" component={OrderScreen} getId={screenId} />
             <Stack.Screen name="send-proof" component={SendProofScreen} getId={screenId} />
             <Stack.Screen name="chat" component={ChatScreen} getId={screenId} />
@@ -170,6 +163,7 @@ function MainAppShell({ onLoggedOut, inviteHandoff, onInviteHandoffDone }) {
           handoff={inviteHandoff}
           onHandoffDone={onInviteHandoffDone}
         />
+        <NeedsYou visible={tabsFocused && !menuOpen} navigationRef={navigationRef} />
         <SideMenu
           visible={menuOpen && tabsFocused}
           onClose={() => setMenuOpen(false)}
@@ -177,13 +171,13 @@ function MainAppShell({ onLoggedOut, inviteHandoff, onInviteHandoffDone }) {
             setMenuOpen(false);
             navigationRef.navigate('circle', { filter: 'circle', at: Date.now() });
           }}
-          onCards={() => {
-            setMenuOpen(false);
-            navigationRef.navigate('my-cards');
-          }}
           onHistory={() => {
             setMenuOpen(false);
             navigationRef.navigate('history');
+          }}
+          onSettings={() => {
+            setMenuOpen(false);
+            navigationRef.navigate('settings');
           }}
           onHowItWorks={() => {
             setMenuOpen(false);
@@ -193,7 +187,6 @@ function MainAppShell({ onLoggedOut, inviteHandoff, onInviteHandoffDone }) {
         />
       </View>
     </AppActionsProvider>
-    </RoleModeProvider>
   );
 }
 

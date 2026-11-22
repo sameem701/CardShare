@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { ALLOWED_BANKS, ALLOWED_CARD_TIERS, addCard, getCards, toggleCardSharing } from '../api/cards';
+import { addCard, getBanks, getCards, getTiers, toggleCardSharing } from '../api/cards';
 import Dropdown from '../components/Dropdown';
 import ErrorBanner from '../components/ErrorBanner';
 import PrimaryButton from '../components/PrimaryButton';
@@ -12,6 +12,7 @@ import theme from '../constants/theme';
 import { useSession } from '../context/SessionContext';
 import { useToast } from '../context/ToastContext';
 import { queryClient } from '../queries/client';
+import { useScreenQuery } from '../queries/useScreenQuery';
 import { asList, sharingOn } from '../utils/format';
 
 export default function AddCardScreen() {
@@ -24,6 +25,16 @@ export default function AddCardScreen() {
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const banksQuery = useScreenQuery(
+    ['banks'],
+    async ({ signal }) => asList(await getBanks(sessionId, user.id, { signal }))
+  );
+  const tiersQuery = useScreenQuery(
+    ['tiers'],
+    async ({ signal }) => asList(await getTiers(sessionId, user.id, { signal }))
+  );
+  const banks = banksQuery.data || [];
+  const tiers = tiersQuery.data || [];
 
   const submit = async () => {
     if (!bank) {
@@ -67,8 +78,8 @@ export default function AddCardScreen() {
       <TopBar title="Add a card" onBack={goBack} />
       <View style={styles.scroll}>
         <Text style={styles.subtitle}>Bank and tier only. The card number stays with you.</Text>
-        <Dropdown label="Bank" placeholder="Choose a bank" options={ALLOWED_BANKS} value={bank} onChange={setBank} />
-        <Dropdown label="Tier" placeholder="Choose a tier" options={ALLOWED_CARD_TIERS} value={tier} onChange={setTier} />
+        <Dropdown label="Bank" placeholder="Choose a bank" options={banks} value={bank} onChange={setBank} />
+        <Dropdown label="Tier" placeholder="Choose a tier" options={tiers} value={tier} onChange={setTier} />
         <Pressable
           style={styles.shareRow}
           onPress={() => setSharing((current) => !current)}
@@ -84,7 +95,13 @@ export default function AddCardScreen() {
             ? 'Your circle can see this card and ask you to order on it.'
             : 'Your circle cannot see this card.'}
         </Text>
-        <ErrorBanner message={error} />
+        <ErrorBanner
+          message={error || banksQuery.errorMessage || tiersQuery.errorMessage}
+          onRetry={banksQuery.errorMessage || tiersQuery.errorMessage ? () => {
+            banksQuery.refetch();
+            tiersQuery.refetch();
+          } : undefined}
+        />
         <PrimaryButton label="Save card" loading={saving} onPress={submit} />
       </View>
     </ScreenShell>
