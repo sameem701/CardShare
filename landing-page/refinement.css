@@ -7,12 +7,12 @@ h1, h2, h3 { letter-spacing: -.045em; }
 .cover { background: #0d1712; }
 .c-glow, .c-grain { display: none; }
 .c-grid { opacity: .55; }
-.cover-stage { inset: 76px 0 70px; gap: clamp(12px, 3vh, 28px); }
-.logo-wrap { width: clamp(126px, min(31vw, 33vh), 335px); animation-duration: .48s; filter: drop-shadow(0 15px 34px #0005); }
+.cover-stage { inset: 76px 0 86px; gap: clamp(10px, 2vh, 22px); }
+.logo-wrap { position: relative; top: -8px; width: clamp(144px, min(36vw, 38vh), 380px); animation-duration: .48s; filter: drop-shadow(0 15px 34px #0005); }
 .logo-float { animation: none; }
-.cover-copy { display: grid; justify-items: center; gap: 14px; }
-.cover-copy h1 { max-width: 1050px; font-size: clamp(40px, 7.15vw, 85px); font-weight: 600; line-height: 1.04; text-wrap: balance; }
-.cover-copy p { font-size: clamp(16px, 2.15vw, 21px); color: #dcebdc; }
+.cover-copy { display: grid; justify-items: center; gap: 10px; }
+.cover-copy h1 { max-width: 1050px; font-size: clamp(44px, min(8vw, 12.8vh), 94px); font-weight: 600; line-height: 1.02; text-wrap: balance; }
+.cover-copy p { font-size: clamp(18px, 2.55vw, 25px); color: #dcebdc; }
 .cover-copy .button { margin-top: 5px; }
 .cover-copy .button:focus-visible, .header.on-cover :focus-visible { outline-color: #f5f4ef; }
 .sheet { padding-top: 0; box-shadow: 0 -16px 40px #0004; }
@@ -80,9 +80,9 @@ footer.wrap { border: 0; padding-block: 27px; }
 .footer-links a { text-decoration: underline; text-underline-offset: 3px; }
 
 @media (max-width: 740px) {
-  .cover-stage { inset: 65px 0 57px; padding-inline: 18px; }
-  .cover-copy { gap: 12px; }
-  .cover-copy h1 { font-size: clamp(39px, 10vw, 61px); }
+  .cover-stage { inset: 65px 0 69px; padding-inline: 18px; }
+  .cover-copy { gap: 10px; }
+  .cover-copy h1 { font-size: clamp(30px, min(9vw, 10.5vh), 63px); }
   .brand { font-size: 23px; }
   .navlinks { gap: clamp(10px, 3vw, 20px); }
   .navlinks a, .navlinks a[href="#how"] { font-size: 14px; white-space: nowrap; }
@@ -92,9 +92,9 @@ footer.wrap { border: 0; padding-block: 27px; }
 }
 @media (max-height: 530px) {
   .cover-stage { inset: 63px 0 36px; gap: 8px; }
-  .logo-wrap { width: clamp(64px, 20vh, 127px); }
+  .logo-wrap { top: -4px; width: clamp(72px, 22vh, 142px); }
   .cover-copy { gap: 6px; }
-  .cover-copy h1 { font-size: clamp(29px, 8vh, 46px); }
+  .cover-copy h1 { font-size: clamp(29px, min(9vw, 9vh), 48px); }
   .cover-copy .button { padding-block: 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
