@@ -5,13 +5,41 @@
 <title>CardShare waitlist privacy</title>
 <style>
   body { margin: 0; background: #f5f4ef; color: #17241e; font: 1rem/1.6 system-ui, sans-serif; }
-  main { max-width: 42rem; margin: 0 auto; padding: 38px 24px 64px; }
-  a { color: #126540; text-underline-offset: 3px; }
-  h1 { font-size: clamp(2.3rem, 7vw, 3.6rem); line-height: 1.07; }
+  .page-header, main { max-width: 42rem; margin: 0 auto; padding-inline: 24px; }
+  .page-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 24px; }
+  .brand { display: inline-flex; align-items: center; gap: 9px; font-size: 1.35rem; font-weight: 650; letter-spacing: -.04em; }
+  .brand svg { width: 36px; height: auto; }
+  .back-button { display: inline-flex; align-items: center; min-height: 44px; padding-inline: 22px; border-radius: 7px; background: #173c2b; color: #f5f4ef; font-size: 15px; font-weight: 600; text-decoration: none; transition: background .2s, transform .2s; }
+  .back-button:hover { background: #0d1712; transform: translateY(-2px); }
+  .back-button:focus-visible { outline: 2px solid #173c2b; outline-offset: 4px; }
+  @media (prefers-reduced-motion: reduce) {
+    .back-button { transition: none; }
+    .back-button:hover { transform: none; }
+  }
+  main { padding-block: 30px 64px; border-top: 1px solid #d8ded7; }
+  h1 { margin-top: 0; font-size: clamp(2.3rem, 7vw, 3.6rem); line-height: 1.07; letter-spacing: -.04em; }
   h2 { font-size: 1.25rem; margin-top: 1.6rem; }
 </style>
+<header class="page-header">
+  <div class="brand">
+    <svg viewBox="160 266 720 490" aria-hidden="true" fill="none">
+      <defs>
+        <mask id="card-cutout" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+          <rect width="1024" height="1024" fill="white"/>
+          <rect x="640" y="363" width="100" height="210" fill="black"/>
+          <path d="M334 604 292 667H376Z" fill="black" stroke="black" stroke-width="40" stroke-linejoin="round"/>
+        </mask>
+      </defs>
+      <rect x="180" y="287" width="510" height="360" rx="70" stroke="#008553" stroke-width="30" mask="url(#card-cutout)"/>
+      <path d="M845 447V453A75 75 0 0 0 770 378H410A75 75 0 0 0 335 453V483A75 75 0 0 0 410 558H770A75 75 0 0 1 845 633V660A75 75 0 0 1 770 735H410A75 75 0 0 1 335 660V675" stroke="#173c2b" stroke-width="30"/>
+      <circle cx="844" cy="490" r="29" fill="#008553"/>
+      <path d="M334 604 292 667H376Z" fill="#008553" stroke="#008553" stroke-width="14" stroke-linejoin="round"/>
+    </svg>
+    <span>CardShare</span>
+  </div>
+  <a class="back-button" href="/" aria-label="Back to CardShare">Back</a>
+</header>
 <main>
-  <a href="/">Back to CardShare</a>
   <h1>Waitlist privacy</h1>
   <p>This policy covers the CardShare landing page and early-access waitlist.</p>
   <h2>What we collect and why</h2>
