@@ -4,6 +4,35 @@ const track = document.getElementById('case-track');
 const control = document.getElementById('case-control');
 const phrases = Array.from(track.children);
 const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+const sectionLinks = new Set(['#join', '#how', '#faq', '#main']);
+
+function clearSectionFragment() {
+  if (!sectionLinks.has(window.location.hash)) return;
+  const { pathname, search } = window.location;
+  window.history.replaceState(window.history.state, '', pathname + search);
+  window.scrollTo({ top: 0, behavior: 'instant' });
+}
+
+clearSectionFragment();
+window.addEventListener('hashchange', clearSectionFragment);
+
+document.addEventListener('click', (event) => {
+  if (
+    event.defaultPrevented || event.button !== 0 ||
+    event.metaKey || event.ctrlKey || event.shiftKey || event.altKey
+  ) return;
+
+  const fragment = event.target.closest('a[href]')?.getAttribute('href');
+  if (!sectionLinks.has(fragment)) return;
+  const section = document.getElementById(fragment.slice(1));
+  if (!section) return;
+
+  event.preventDefault();
+  section.tabIndex = -1;
+  section.focus({ preventScroll: true });
+  section.scrollIntoView({ behavior: reduced.matches || fragment === '#main' ? 'instant' : 'smooth' });
+});
+
 let active = 0;
 let paused = false;
 let visible = false;
